@@ -1255,6 +1255,7 @@ class RateLimitRule(BaseModel):
     enabled: bool = True
 
 class RateLimitCheck(BaseModel):
+    channel: str = "social"
     scope: str
     scope_key: str
     max_count: int
@@ -1443,8 +1444,8 @@ update pipeline_runs
 set status = 'running', locked_at = now(), locked_by = $1, updated_at = now()
 where id = (
   select id from pipeline_runs
-  where status = 'queued' and run_after <= now()
-  order by priority, run_after
+  where status = 'queued' and run_after <= $2::timestamptz
+  order by priority, run_after, created_at
   for update skip locked
   limit 1
 )
@@ -1470,7 +1471,7 @@ update pipeline_runs
 set attempts = attempts + 1,
     status = case when attempts + 1 >= max_attempts then 'dead' else 'queued' end,
     run_after = case when attempts + 1 >= max_attempts then run_after
-                     else $2::timestamptz end,
+                     else $2::timestamptz + (60 * power(2, attempts)) * interval '1 second' end,
     last_error = $3,
     locked_at = null,
     locked_by = null,
@@ -1478,7 +1479,7 @@ set attempts = attempts + 1,
 where id = $1;
 ```
 
-Compute the backoff timestamp in Python (`now + timedelta(seconds=60 * 2 ** attempts)`) and pass it as `$2`.
+Compute backoff in SQL from the row's current `attempts`; `fail_task` receives no attempt count, so it cannot do this in Python. Pass `now` as `$2`.
 
 Rate limit consumption, inside one transaction:
 
@@ -1494,6 +1495,8 @@ returning count;
 
 If any check returns no row, raise an internal exception to roll back the transaction, then return `RateLimitDecision(allowed=False, exceeded_scope=..., exceeded_scope_key=..., retry_after_seconds=...)`. If all pass, return `RateLimitDecision(allowed=True)`.
 
+`window_start = now - timedelta(seconds=int(now.timestamp()) % check.window_seconds)`; `retry_after_seconds = max(0, int((window_start + timedelta(seconds=check.window_seconds) - now).total_seconds()))`. Use `check.channel`, which defaults to `"social"`. Never use SQL `now()` where the method takes a `now` argument.
+
 Upsert lead:
 
 ```sql
@@ -1507,13 +1510,17 @@ If no row is returned, select the existing row by `(tenant_id, dedupe_key)` and 
 
 `create_message`, `create_approval_request`, and `enqueue_outbox` use the same `on conflict (tenant_id, dedupe_key|approval_id|idempotency_key) do nothing returning *` pattern; if no row is returned, select the existing row and return it. This makes draft/card retries idempotent.
 
+`claim_outbox(limit, now)` atomically marks up to `limit` rows with `status in ('pending','failed') and next_attempt_at <= $2` as `sending`, using `UPDATE ... WHERE id IN (SELECT id ... FOR UPDATE SKIP LOCKED LIMIT $1) RETURNING *`. `mark_outbox_failed` increments `attempts`, stores the error, and requeues with the same SQL-side backoff, setting `dead` when `attempts >= 5` (the table has no `max_attempts` column).
+
+`count_followups(tenant_id, original_message_id)` counts `outreach_messages` rows whose `metadata->>'followup_of' = $2`. `get_prompt_template` and `get_scoring_rubric` with `version=None` select the highest enabled version.
+
 Status transitions always use `UPDATE ... WHERE tenant_id=$1 AND id=$2 AND status=$expected` and return `rowcount == 1`. If `rowcount == 0`, return `False`; callers treat it as a concurrency conflict.
 
 `ensure_tenant(tenant_id, workspace_id)` is a test/helper method that inserts a tenant and workspace if missing; production uses the seed script. `add_source(source)` inserts one `growth_sources` row. `truncate_all_for_tests()` runs `TRUNCATE tenants CASCADE` and is test-only (never exposed by the API).
 
-The `New*` models omit status columns that are NOT NULL in SQL. The repository injects the initial status in SQL: `queued` for tasks, `pending` for outbox messages and approval requests, `discovered` for leads, `draft_ready` for messages. Callers never pass these.
+The `New*` models omit status columns that are NOT NULL in SQL, with one exception: `NewOutreachMessage.status` is required because Task 17 creates `draft_ready`, `rejected`, and `suppressed` messages. The repository injects the initial status in SQL only where the model omits it: `queued` for tasks, `pending` for outbox messages and approval requests, `discovered` for leads. It inserts the caller's status verbatim for messages. For tasks and leads, callers never pass status.
 
-`rollback_config_version` reads `config_versions.snapshot`, updates the row in the whitelisted `table_name` (`prompt_templates`, `scoring_rubrics`, `provider_configs`, `rate_limit_rules`) by `record_id`, and writes a new `config_versions` row recording the rollback. Unknown table names raise `ValueError`.
+`rollback_config_version` reads `config_versions.snapshot`, updates the row in the whitelisted `table_name` (`prompt_templates`, `scoring_rubrics`, `provider_configs`) by `record_id`, and writes a new `config_versions` row recording the rollback. `rate_limit_rules` is excluded because it has no surrogate `id` column (composite primary key only), so `record_id` cannot address it. Unknown table names raise `ValueError`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
