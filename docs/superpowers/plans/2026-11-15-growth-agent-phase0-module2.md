@@ -921,6 +921,7 @@ git commit -m "feat: add social schema and tenant RLS"
 - Create: `server/growth_core/seed_data.py`
 - Create: `server/growth_core/scripts/__init__.py`
 - Create: `server/growth_core/scripts/seed.py`
+- Create: `server/growth_core/migrations/0004_prompt_user_template.sql`
 - Test: `server/tests/growth/test_seed.py`
 
 **Interfaces:**
@@ -970,6 +971,8 @@ Expected: FAIL because `seed_tenant` does not exist.
 - [ ] **Step 3: Implement seed constants and idempotent inserts**
 
 `seed_tenant` first inserts the `tenants` and `workspaces` rows if missing (`insert ... on conflict do nothing`), then all defaults. `seed_data.py` defines the exact prompt strings, rubric JSON, and rate rules. Use `string.Template` placeholders (`$title`, `$body`, `$platform`, `$community`, `$age_days`, `$product_name`, `$product_url`, `$previous_reply`, `$followup_index`).
+
+`prompt_templates` stores the system prompt in `template`; the user prompt lives in a new `user_template text not null default ''` column added by `0004_prompt_user_template.sql` (`alter table prompt_templates add column if not exists user_template text not null default ''`). Seed each prompt row with `module='social'`, `version=1`, `output_schema={"type": "object"}`, `model_hint=NULL` (models come from settings), and both prompt texts.
 
 `SOCIAL_INTENT_SYSTEM`:
 
@@ -1227,6 +1230,7 @@ class PromptTemplate(BaseModel):
     module: str
     version: int
     template: str
+    user_template: str
     output_schema: dict[str, Any]
     model_hint: str | None = None
     enabled: bool = True
@@ -2518,7 +2522,7 @@ Expected: FAIL because `scoring.py` does not exist.
 
 - [ ] **Step 3: Implement scoring**
 
-Load `lead`, `rubric = await repo.get_scoring_rubric(tenant_id, "social_intent")`, and `prompt = await repo.get_prompt_template(tenant_id, "social_intent")`. Render the user prompt with `string.Template.safe_substitute(platform=..., community=..., age_days=..., title=..., body=...)`.
+Load `lead`, `rubric = await repo.get_scoring_rubric(tenant_id, "social_intent")`, and `prompt = await repo.get_prompt_template(tenant_id, "social_intent")`. Render the user prompt from `prompt.user_template` with `string.Template.safe_substitute(platform=..., community=..., age_days=..., title=..., body=...)`; pass `prompt.template` as the system prompt.
 
 Call `llm.complete_json(system=..., user=..., schema=IntentScoreDraft, model=model or None)`. Validate that the returned dimensions exactly match the rubric ids; missing or unknown id → `ProviderBadOutput`. The scoring handler passes `settings.llm_scoring_model` (Task 21), keeping scoring on the cheap model.
 
@@ -2661,9 +2665,9 @@ async def test_no_link_subreddit_is_suppressed(repo, fake_llm, fake_notifier, no
 
 `draft_reply`:
 - Before calling the LLM, check `existing = await repo.find_message_by_dedupe_key(tenant_id, f"draft:{lead_id}")`; if it exists, return it after ensuring its approval request and Feishu outbox row exist (use deterministic `approval_id = f"{existing.id}:v{latest.version}"` and outbox key `feishu:{approval_id}`). This makes worker retries safe even if the previous attempt crashed between writes.
-- Load lead and `prompt = repo.get_prompt_template(tenant_id, "social_reply")`.
+- Load lead and `prompt = repo.get_prompt_template(tenant_id, "social_reply")`; pass `prompt.template` as the system prompt.
 - Build `score = IntentScore(score=lead.score or 0, status=lead.status if lead.status in {"qualified","watch","dropped"} else "watch", dimensions=[], penalties=[], summary="")` for the approval card.
-- Render user prompt with `string.Template.safe_substitute`.
+- Render the user prompt from `prompt.user_template` with `string.Template.safe_substitute`.
 - Call `llm.complete_json(..., schema=ReplyDraft, model=settings.llm_drafting_model or None)` so drafting uses the stronger model.
 - Require exactly one `{{LINK}}`; otherwise create a `rejected` message with `metadata.policy_violations=["PLACEHOLDER_COUNT"]` and audit, return it.
 - `url = build_utm_url(settings.product_url, draft.link_path, lead_id=str(lead.id), platform=lead.platform)`.
@@ -2963,7 +2967,7 @@ Expected: FAIL because `followup.py` does not exist.
 - If the lead’s author is suppressed, stop.
 - `count = await repo.count_followups(tenant_id, original_message_id)`; if `count >= settings.followup_max_total`, stop.
 - `last = await repo.latest_sent_at(tenant_id, lead.id)`; if `now - last < timedelta(hours=settings.followup_min_interval_hours)`, enqueue the same check with `run_after = last + 24h` and a new idempotency key `followup:{original_id}:retry:{int(now.timestamp())}`; return `None`.
-- Load `prompt = repo.get_prompt_template(tenant_id, "social_followup")` and the previous version text.
+- Load `prompt = repo.get_prompt_template(tenant_id, "social_followup")` and the previous version text. Pass `prompt.template` as the system prompt and render `prompt.user_template` with `string.Template.safe_substitute`.
 - Call `llm.complete_json(..., schema=ReplyDraft)` with `$title`, `$body`, `$previous_reply`, `$followup_index`, `$product_name`.
 - Apply the same placeholder/link-policy validation as Task 17. Invalid → create `rejected` message and audit, return it (do not send another follow-up).
 - Create a new `OutreachMessage` with `dedupe_key=f"followup:{original_message_id}:{count + 1}"` and `metadata={"followup_of": str(original_message_id), "followup_index": count + 1, "subreddit": lead.subreddit, "has_link": True, "draft_version": 1}`; create version 1; create approval request with `approval_id=f"{message.id}:v1"`; enqueue Feishu card.
