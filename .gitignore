@@ -13,3 +13,6 @@ __pycache__/
 *.log
 server/briefs/run_*.json
 server/briefs/run_*.md
+
+# Superpowers SDD workspace
+.superpowers/
