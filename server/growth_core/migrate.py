@@ -26,7 +26,11 @@ async def apply_migrations(
     applied versions are skipped, so repeated calls are idempotent.
     """
     directory = Path(migrations_dir) if migrations_dir else DEFAULT_MIGRATIONS_DIR
+    if migrations_dir and not directory.is_dir():
+        raise FileNotFoundError(f"Migrations directory not found: {directory}")
     files = sorted(directory.glob("*.sql"), key=lambda path: path.name)
+    if migrations_dir and not files:
+        raise ValueError(f"No *.sql migrations found in {directory}")
 
     applied: list[str] = []
     conn = await asyncpg.connect(database_url)
