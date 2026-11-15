@@ -137,9 +137,9 @@ class FakeGrowthRepository:
         self.sources: list[GrowthSource] = []
         self.approvals: list[ApprovalRequest] = []
         self.outreach_versions: list[OutreachVersion] = []
-        self.deliveries: list[NewDeliveryLog] = []
-        self.audit: list[NewAuditEntry] = []
-        self.suppressions: set[tuple[UUID, str, str]] = set()
+        self.deliveries: list[dict[str, Any]] = []
+        self.audit: list[dict[str, Any]] = []
+        self.suppressions: dict[tuple[UUID, str, str], tuple[str, str]] = {}
 
         # Configuration rows keyed for direct seeding -------------------
         self.prompts: dict[tuple[UUID, str, int], PromptTemplate] = {}
@@ -163,7 +163,12 @@ class FakeGrowthRepository:
             and config.capability == capability
             and config.enabled
         ]
-        return sorted(rows, key=lambda config: (config.priority, config.provider))
+        return [
+            config.model_copy(deep=True)
+            for config in sorted(
+                rows, key=lambda config: (config.priority, config.provider)
+            )
+        ]
 
     async def get_prompt_template(
         self, tenant_id: UUID, key: str, version: int | None = None
@@ -177,10 +182,12 @@ class FakeGrowthRepository:
             matches = [prompt for prompt in matches if prompt.enabled]
             if not matches:
                 return None
-            return max(matches, key=lambda prompt: prompt.version)
+            return max(
+                matches, key=lambda prompt: prompt.version
+            ).model_copy(deep=True)
         for prompt in matches:
             if prompt.version == version:
-                return prompt
+                return prompt.model_copy(deep=True)
         return None
 
     async def get_scoring_rubric(
@@ -195,10 +202,12 @@ class FakeGrowthRepository:
             matches = [rubric for rubric in matches if rubric.enabled]
             if not matches:
                 return None
-            return max(matches, key=lambda rubric: rubric.version)
+            return max(
+                matches, key=lambda rubric: rubric.version
+            ).model_copy(deep=True)
         for rubric in matches:
             if rubric.version == version:
-                return rubric
+                return rubric.model_copy(deep=True)
         return None
 
     async def get_feature(self, tenant_id: UUID, feature_key: str) -> bool:
@@ -212,7 +221,10 @@ class FakeGrowthRepository:
             for rule in self.rate_rules.values()
             if rule.tenant_id == tenant_id and rule.channel == channel
         ]
-        return sorted(rows, key=lambda rule: (rule.scope, rule.scope_key))
+        return [
+            rule.model_copy(deep=True)
+            for rule in sorted(rows, key=lambda rule: (rule.scope, rule.scope_key))
+        ]
 
     async def ensure_tenant(self, tenant_id: UUID, workspace_id: UUID) -> None:
         return None
@@ -226,7 +238,8 @@ class FakeGrowthRepository:
         if not exists:
             self.sources.append(
                 source.model_copy(
-                    update={"last_run_at": _aware(source.last_run_at)}
+                    deep=True,
+                    update={"last_run_at": _aware(source.last_run_at)},
                 )
             )
 
@@ -258,7 +271,7 @@ class FakeGrowthRepository:
             updated_at=clock,
         )
         row = PipelineTask(**data)
-        self.tasks.append(row)
+        self.tasks.append(row.model_copy(deep=True))
         return row.id
 
     async def claim_task(
@@ -284,7 +297,7 @@ class FakeGrowthRepository:
         task.locked_at = clock
         task.locked_by = worker_id
         task.updated_at = clock
-        return task
+        return task.model_copy(deep=True)
 
     async def complete_task(
         self, task_id: UUID, worker_id: str | None = None
@@ -366,7 +379,7 @@ class FakeGrowthRepository:
             updated_at=clock,
         )
         row = OutboxMessage(**data)
-        self.outbox.append(row)
+        self.outbox.append(row.model_copy(deep=True))
         return row.id
 
     async def claim_outbox(
@@ -386,7 +399,7 @@ class FakeGrowthRepository:
         for row in claimed:
             row.status = "sending"
             row.updated_at = clock
-        return claimed
+        return [row.model_copy(deep=True) for row in claimed]
 
     async def mark_outbox_sent(self, outbox_id: UUID) -> None:
         row = self._find_outbox(outbox_id)
@@ -477,10 +490,16 @@ class FakeGrowthRepository:
         reason: str,
         source: str = "",
     ) -> None:
-        self.suppressions.add((tenant_id, kind, value))
+        self.suppressions.setdefault((tenant_id, kind, value), (reason, source))
 
     async def write_audit(self, entry: NewAuditEntry) -> None:
-        self.audit.append(entry)
+        self.audit.append(
+            {
+                "id": uuid4(),
+                "created_at": datetime.now(timezone.utc),
+                **entry.model_dump(),
+            }
+        )
 
     async def rollback_config_version(
         self, tenant_id: UUID, version_id: UUID, changed_by: str
@@ -598,9 +617,17 @@ class FakeGrowthRepository:
             for source in self.sources
             if source.tenant_id == tenant_id and source.enabled
         ]
-        return sorted(
-            rows, key=lambda source: (source.source_type, source.platform, source.id)
-        )
+        return [
+            source.model_copy(deep=True)
+            for source in sorted(
+                rows,
+                key=lambda source: (
+                    source.source_type,
+                    source.platform,
+                    source.id,
+                ),
+            )
+        ]
 
     async def update_source_run(
         self,
@@ -618,7 +645,7 @@ class FakeGrowthRepository:
     async def upsert_lead(self, lead: NewSocialLead) -> tuple[SocialLead, bool]:
         existing = self._find_lead_by_dedupe(lead.tenant_id, lead.dedupe_key)
         if existing is not None:
-            return existing, False
+            return existing.model_copy(deep=True), False
 
         clock = datetime.now(timezone.utc)
         data = lead.model_dump()
@@ -635,20 +662,14 @@ class FakeGrowthRepository:
             updated_at=clock,
         )
         row = SocialLead(**data)
-        self.leads.append(row)
-        return row, True
+        self.leads.append(row.model_copy(deep=True))
+        return row.model_copy(deep=True), True
 
     async def get_lead(
         self, tenant_id: UUID, lead_id: UUID
     ) -> SocialLead | None:
-        return next(
-            (
-                lead
-                for lead in self.leads
-                if lead.tenant_id == tenant_id and lead.id == lead_id
-            ),
-            None,
-        )
+        lead = self._find_lead(tenant_id, lead_id)
+        return None if lead is None else lead.model_copy(deep=True)
 
     async def list_leads(
         self, tenant_id: UUID, status: str | None = None, limit: int = 50
@@ -660,8 +681,8 @@ class FakeGrowthRepository:
             and (status is None or lead.status == status)
         ]
         rows.sort(key=lambda lead: str(lead.id))
-        rows.sort(key=lambda lead: lead.created_at, reverse=True)
-        return rows[: int(limit)]
+        rows.sort(key=lambda lead: _aware(lead.created_at), reverse=True)
+        return [lead.model_copy(deep=True) for lead in rows[: int(limit)]]
 
     async def update_lead_status(
         self,
@@ -697,7 +718,7 @@ class FakeGrowthRepository:
     async def create_message(self, message: NewOutreachMessage) -> OutreachMessage:
         existing = self._find_message_by_dedupe(message.tenant_id, message.dedupe_key)
         if existing is not None:
-            return existing
+            return existing.model_copy(deep=True)
 
         clock = datetime.now(timezone.utc)
         data = message.model_dump()
@@ -711,20 +732,14 @@ class FakeGrowthRepository:
             updated_at=clock,
         )
         row = OutreachMessage(**data)
-        self.messages.append(row)
-        return row
+        self.messages.append(row.model_copy(deep=True))
+        return row.model_copy(deep=True)
 
     async def get_message(
         self, tenant_id: UUID, message_id: UUID
     ) -> OutreachMessage | None:
-        return next(
-            (
-                message
-                for message in self.messages
-                if message.tenant_id == tenant_id and message.id == message_id
-            ),
-            None,
-        )
+        message = self._find_message(tenant_id, message_id)
+        return None if message is None else message.model_copy(deep=True)
 
     async def list_messages(
         self, tenant_id: UUID, status: str | None = None, limit: int = 50
@@ -736,13 +751,16 @@ class FakeGrowthRepository:
             and (status is None or message.status == status)
         ]
         rows.sort(key=lambda message: str(message.id))
-        rows.sort(key=lambda message: message.created_at, reverse=True)
-        return rows[: int(limit)]
+        rows.sort(key=lambda message: _aware(message.created_at), reverse=True)
+        return [
+            message.model_copy(deep=True) for message in rows[: int(limit)]
+        ]
 
     async def find_message_by_dedupe_key(
         self, tenant_id: UUID, dedupe_key: str
     ) -> OutreachMessage | None:
-        return self._find_message_by_dedupe(tenant_id, dedupe_key)
+        message = self._find_message_by_dedupe(tenant_id, dedupe_key)
+        return None if message is None else message.model_copy(deep=True)
 
     async def update_message_status(
         self,
@@ -756,7 +774,7 @@ class FakeGrowthRepository:
         provider_message_id: str | None = None,
         metadata_patch: dict[str, Any] | None = None,
     ) -> bool:
-        message = await self.get_message(tenant_id, message_id)
+        message = self._find_message(tenant_id, message_id)
         if message is None or message.status != expected_status:
             return False
         message.status = status
@@ -781,8 +799,8 @@ class FakeGrowthRepository:
             created_at=datetime.now(timezone.utc),
         )
         row = OutreachVersion(**data)
-        self.outreach_versions.append(row)
-        return row
+        self.outreach_versions.append(row.model_copy(deep=True))
+        return row.model_copy(deep=True)
 
     async def get_latest_version(
         self, tenant_id: UUID, message_id: UUID
@@ -794,7 +812,9 @@ class FakeGrowthRepository:
         ]
         if not matches:
             return None
-        return max(matches, key=lambda version: version.version)
+        return max(
+            matches, key=lambda version: version.version
+        ).model_copy(deep=True)
 
     async def mark_version_approved(
         self,
@@ -817,7 +837,13 @@ class FakeGrowthRepository:
         version.approved_at = _aware(approved_at)
 
     async def record_delivery(self, entry: NewDeliveryLog) -> None:
-        self.deliveries.append(entry)
+        self.deliveries.append(
+            {
+                "id": uuid4(),
+                "created_at": datetime.now(timezone.utc),
+                **entry.model_dump(),
+            }
+        )
 
     async def count_followups(
         self, tenant_id: UUID, original_message_id: UUID
@@ -849,7 +875,7 @@ class FakeGrowthRepository:
     ) -> ApprovalRequest:
         existing = self._find_approval(request.tenant_id, request.approval_id)
         if existing is not None:
-            return existing
+            return existing.model_copy(deep=True)
 
         clock = datetime.now(timezone.utc)
         data = request.model_dump()
@@ -864,13 +890,16 @@ class FakeGrowthRepository:
             updated_at=clock,
         )
         row = ApprovalRequest(**data)
-        self.approvals.append(row)
-        return row
+        self.approvals.append(row.model_copy(deep=True))
+        return row.model_copy(deep=True)
 
     async def get_approval_request(
         self, tenant_id: UUID, approval_id: str
     ) -> ApprovalRequest | None:
-        return self._find_approval(tenant_id, approval_id)
+        approval = self._find_approval(tenant_id, approval_id)
+        return (
+            None if approval is None else approval.model_copy(deep=True)
+        )
 
     async def decide_approval(
         self,
@@ -929,14 +958,16 @@ class FakeGrowthRepository:
         so callers need prefix matching rather than exact equality.
         """
         return [
-            task
+            task.model_copy(deep=True)
             for task in self.tasks
             if task.idempotency_key.startswith(idempotency_key_prefix)
         ]
 
     def outbox_for(self, idempotency_key: str) -> list[OutboxMessage]:
         return [
-            row for row in self.outbox if row.idempotency_key == idempotency_key
+            row.model_copy(deep=True)
+            for row in self.outbox
+            if row.idempotency_key == idempotency_key
         ]
 
     def set_rate_counter(
@@ -953,7 +984,11 @@ class FakeGrowthRepository:
         ] = count
 
     def truncate_all_for_tests(self) -> None:
-        """Clear every store. Test-only; mirrors the Postgres helper."""
+        """Clear every store. Test-only; mirrors the Postgres helper.
+
+        This fake helper is synchronous and must not be awaited (the Postgres
+        version is ``async`` because it issues SQL).
+        """
         for collection in (
             self.tasks,
             self.outbox,
@@ -1017,6 +1052,18 @@ class FakeGrowthRepository:
                 lead
                 for lead in self.leads
                 if lead.tenant_id == tenant_id and lead.dedupe_key == dedupe_key
+            ),
+            None,
+        )
+
+    def _find_message(
+        self, tenant_id: UUID, message_id: UUID
+    ) -> OutreachMessage | None:
+        return next(
+            (
+                message
+                for message in self.messages
+                if message.tenant_id == tenant_id and message.id == message_id
             ),
             None,
         )

@@ -14,6 +14,8 @@ import pytest
 from growth_core.repositories.base import GrowthRepository
 from growth_core.schemas import (
     NewApprovalRequest,
+    NewAuditEntry,
+    NewDeliveryLog,
     NewOutboxMessage,
     NewOutreachMessage,
     NewSocialLead,
@@ -281,7 +283,9 @@ async def test_lead_status_compare_and_set(repo):
         )
         is False
     )
-    assert lead.status == "discovered"
+    stored = await repo.get_lead(tenant_id, lead.id)
+    assert stored is not None
+    assert stored.status == "discovered"
 
     assert (
         await repo.update_lead_status(
@@ -289,8 +293,10 @@ async def test_lead_status_compare_and_set(repo):
         )
         is True
     )
-    assert lead.status == "qualified"
-    assert lead.version == 2
+    stored = await repo.get_lead(tenant_id, lead.id)
+    assert stored is not None
+    assert stored.status == "qualified"
+    assert stored.version == 2
 
 
 async def test_message_status_compare_and_set(repo):
@@ -317,8 +323,10 @@ async def test_message_status_compare_and_set(repo):
         )
         is True
     )
-    assert message.status == "sent"
-    assert message.version == 2
+    stored = await repo.get_message(tenant_id, message.id)
+    assert stored is not None
+    assert stored.status == "sent"
+    assert stored.version == 2
 
 
 async def test_approval_decision_is_single_shot(repo):
@@ -340,8 +348,86 @@ async def test_approval_decision_is_single_shot(repo):
         await repo.decide_approval(tenant_id, approval.approval_id, "rejected", "bob")
         is False
     )
-    assert approval.status == "approved"
-    assert approval.decided_by == "alice"
+    stored = await repo.get_approval_request(tenant_id, approval.approval_id)
+    assert stored is not None
+    assert stored.status == "approved"
+    assert stored.decided_by == "alice"
+
+
+async def test_returned_models_do_not_alias_store(repo):
+    tenant_id, workspace_id = uuid4(), uuid4()
+    lead, _ = await repo.upsert_lead(
+        NewSocialLead(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            platform="reddit",
+            platform_post_id="alias",
+            source_url="https://example.test/alias",
+            dedupe_key="reddit:alias",
+        )
+    )
+    lead.status = "qualified"
+    lead.score = 99
+
+    stored_lead = await repo.get_lead(tenant_id, lead.id)
+    assert stored_lead is not None
+    assert stored_lead.status == "discovered"
+    assert stored_lead.score is None
+
+    message = await repo.create_message(
+        NewOutreachMessage(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            channel="reddit",
+            status="drafted",
+            dedupe_key="message:alias",
+        )
+    )
+    message.status = "sent"
+    message.metadata["mutated"] = True
+
+    stored_message = await repo.get_message(tenant_id, message.id)
+    assert stored_message is not None
+    assert stored_message.status == "drafted"
+    assert stored_message.metadata == {}
+
+
+async def test_suppression_stores_reason_and_source(repo):
+    tenant_id = uuid4()
+    await repo.add_suppression(
+        tenant_id, "email", "a@example.test", "bounce", source="webhook"
+    )
+
+    assert await repo.is_suppressed(tenant_id, "email", "a@example.test")
+    assert repo.suppressions[(tenant_id, "email", "a@example.test")] == (
+        "bounce",
+        "webhook",
+    )
+
+
+async def test_audit_and_delivery_rows_get_server_fields(repo):
+    tenant_id, workspace_id, message_id = uuid4(), uuid4(), uuid4()
+    await repo.write_audit(
+        NewAuditEntry(
+            tenant_id=tenant_id,
+            actor_type="system",
+            action="message.sent",
+            entity_type="outreach_message",
+            entity_id=message_id,
+        )
+    )
+    await repo.record_delivery(
+        NewDeliveryLog(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            message_id=message_id,
+            provider="reddit",
+            event_type="sent",
+        )
+    )
+
+    assert set(repo.audit[0]) >= {"id", "created_at", "action", "entity_type"}
+    assert set(repo.deliveries[0]) >= {"id", "created_at", "event_type", "provider"}
 
 
 async def test_truncate_all_for_tests_clears_every_store(repo):
