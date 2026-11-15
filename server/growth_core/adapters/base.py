@@ -49,9 +49,15 @@ class AdapterHealth:
 class AdapterError(Exception):
     """Base class for adapter failures with a secret-free message."""
 
-    def __init__(self, message: str = "") -> None:
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        retry_after_seconds: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
+        self.retry_after_seconds = retry_after_seconds
 
 
 class ProviderNotConfigured(AdapterError):
