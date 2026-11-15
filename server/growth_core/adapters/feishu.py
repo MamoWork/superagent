@@ -9,6 +9,7 @@ header in an error message.
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -19,9 +20,13 @@ from growth_core.adapters.base import (
     AdapterHealth,
     ProviderAuthError,
     ProviderBadOutput,
+    ProviderNotConfigured,
     ProviderRateLimited,
     ProviderUnavailable,
+    SecretResolver,
 )
+from growth_core.adapters.registry import register_adapter
+from growth_core.schemas import ProviderConfig
 
 __all__ = ["FeishuNotifier"]
 
@@ -113,6 +118,30 @@ class FeishuNotifier:
         self._client = client if client is not None else httpx.AsyncClient()
         self._tenant_token: str | None = None
         self._token_expires_at = 0.0
+
+    @classmethod
+    def from_config(
+        cls,
+        config: ProviderConfig,
+        secrets: SecretResolver,
+    ) -> FeishuNotifier:
+        """Build a notifier from a provider config and a secret resolver.
+
+        The app ID is read from the environment variable named by
+        ``config.config["app_id_env"]`` (default ``GROWTH_FEISHU_APP_ID``);
+        the app secret is resolved through ``secrets`` using
+        ``config.secret_ref``. Error messages name the missing variable but
+        never contain its value.
+        """
+        app_id_env = config.config.get("app_id_env", "GROWTH_FEISHU_APP_ID")
+        app_id = os.environ.get(app_id_env)
+        if not app_id:
+            raise ProviderNotConfigured(
+                f"SECRET_NOT_CONFIGURED: {app_id_env}"
+            )
+        app_secret = secrets.get(config.secret_ref)
+        base_url = config.config.get("base_url", "https://open.feishu.cn")
+        return cls(app_id=app_id, app_secret=app_secret, base_url=base_url)
 
     async def health(self) -> AdapterHealth:
         """Report readiness without making a network call."""
@@ -206,3 +235,10 @@ class FeishuNotifier:
                 "Feishu send response was missing message_id"
             )
         return message_id
+
+
+@register_adapter("notifier", "feishu")
+def _feishu_factory(
+    config: ProviderConfig, secrets: SecretResolver
+) -> FeishuNotifier:
+    return FeishuNotifier.from_config(config, secrets)

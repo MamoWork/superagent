@@ -8,6 +8,12 @@ credentials, tokens, or authorization headers.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Protocol, runtime_checkable
+
+from pydantic import BaseModel
+
+from growth_core.schemas import GrowthSource
 
 __all__ = [
     "AdapterHealth",
@@ -18,6 +24,11 @@ __all__ = [
     "ProviderTimeout",
     "ProviderUnavailable",
     "ProviderBadOutput",
+    "RawPost",
+    "SourceAdapter",
+    "Notifier",
+    "LLMClient",
+    "SecretResolver",
 ]
 
 
@@ -65,3 +76,63 @@ class ProviderUnavailable(AdapterError):
 
 class ProviderBadOutput(AdapterError):
     """The provider responded successfully but the payload was unusable."""
+
+
+@dataclass(frozen=True)
+class RawPost:
+    """A platform post normalized into the shape the lead pipeline consumes."""
+
+    platform: str
+    platform_post_id: str
+    title: str
+    body: str
+    author_public: str | None
+    source_url: str
+    published_at: datetime | None
+    metrics: dict[str, Any]
+    subreddit: str | None
+    raw: dict[str, Any]
+
+
+@runtime_checkable
+class SourceAdapter(Protocol):
+    """Contract for adapters that fetch posts from a social source."""
+
+    name: str
+    capabilities: dict[str, Any]
+
+    async def fetch(self, source: GrowthSource) -> list[RawPost]: ...
+
+    async def health(self) -> AdapterHealth: ...
+
+    def validate_config(self) -> None: ...
+
+
+@runtime_checkable
+class Notifier(Protocol):
+    """Contract for adapters that deliver cards to a chat channel."""
+
+    async def send_card(self, chat_id: str, card: dict[str, Any]) -> str: ...
+
+    async def health(self) -> AdapterHealth: ...
+
+
+@runtime_checkable
+class LLMClient(Protocol):
+    """Contract for LLM adapters that return structured JSON output."""
+
+    async def complete_json(
+        self,
+        *,
+        system: str,
+        user: str,
+        schema: type[BaseModel],
+        model: str | None = None,
+    ) -> BaseModel: ...
+
+
+@runtime_checkable
+class SecretResolver(Protocol):
+    """Resolve a secret reference (for example an env var name) to its value."""
+
+    def get(self, ref: str | None) -> str: ...
