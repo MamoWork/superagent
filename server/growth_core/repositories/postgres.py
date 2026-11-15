@@ -118,12 +118,24 @@ class _RateLimitExceeded(Exception):
         self.window_start = window_start
 
 
+def _aware(value: datetime | None) -> datetime | None:
+    """Normalize a datetime to aware UTC.
+
+    asyncpg encodes a naive datetime using the process-local zone, so every
+    datetime bound to SQL must be normalized first. Naive values are treated
+    as UTC, matching the repository contract.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _now_or_default(now: datetime | None) -> datetime:
     if now is None:
         return datetime.now(timezone.utc)
-    if now.tzinfo is None:
-        return now.replace(tzinfo=timezone.utc)
-    return now.astimezone(timezone.utc)
+    return _aware(now)
 
 
 def _json(value: Any) -> str:
@@ -308,7 +320,7 @@ class PostgresGrowthRepository:
             _json(source.config),
             source.cadence_minutes,
             source.enabled,
-            source.last_run_at,
+            _aware(source.last_run_at),
             source.last_error,
             source.version,
         )
@@ -334,7 +346,7 @@ class PostgresGrowthRepository:
             _json(task.payload),
             task.idempotency_key,
             task.priority,
-            task.run_after,
+            _aware(task.run_after),
             task.max_attempts,
         )
         if record is None:
@@ -374,7 +386,9 @@ class PostgresGrowthRepository:
         )
         return _to_model(PipelineTask, record)
 
-    async def complete_task(self, task_id: UUID) -> None:
+    async def complete_task(
+        self, task_id: UUID, worker_id: str | None = None
+    ) -> None:
         await self._pool.execute(
             """
             update pipeline_runs
@@ -383,12 +397,19 @@ class PostgresGrowthRepository:
                 locked_by = null,
                 updated_at = now()
             where id = $1
+              and status = 'running'
+              and ($2::text is null or locked_by = $2::text)
             """,
             task_id,
+            worker_id,
         )
 
     async def fail_task(
-        self, task_id: UUID, error: str, now: datetime | None = None
+        self,
+        task_id: UUID,
+        error: str,
+        now: datetime | None = None,
+        worker_id: str | None = None,
     ) -> None:
         clock = _now_or_default(now)
         await self._pool.execute(
@@ -407,10 +428,13 @@ class PostgresGrowthRepository:
                 locked_by = null,
                 updated_at = $2::timestamptz
             where id = $1
+              and status = 'running'
+              and ($4::text is null or locked_by = $4::text)
             """,
             task_id,
             clock,
             error,
+            worker_id,
         )
 
     async def reclaim_stale_tasks(
@@ -420,7 +444,9 @@ class PostgresGrowthRepository:
         status = await self._pool.execute(
             """
             update pipeline_runs
-            set status = 'queued',
+            set attempts = attempts + 1,
+                status = case when attempts + 1 >= max_attempts
+                              then 'dead' else 'queued' end,
                 locked_at = null,
                 locked_by = null,
                 updated_at = $2::timestamptz
@@ -453,7 +479,7 @@ class PostgresGrowthRepository:
             message.topic,
             _json(message.payload),
             message.idempotency_key,
-            message.next_attempt_at,
+            _aware(message.next_attempt_at),
         )
         if record is None:
             record = await self._pool.fetchrow(
@@ -497,7 +523,7 @@ class PostgresGrowthRepository:
             set status = 'sent',
                 last_error = null,
                 updated_at = now()
-            where id = $1
+            where id = $1 and status = 'sending'
             """,
             outbox_id,
         )
@@ -519,7 +545,7 @@ class PostgresGrowthRepository:
                                               * interval '1 second' end,
                 last_error = $3,
                 updated_at = $2::timestamptz
-            where id = $1
+            where id = $1 and status = 'sending'
             """,
             outbox_id,
             clock,
@@ -537,6 +563,25 @@ class PostgresGrowthRepository:
     ) -> RateLimitDecision:
         clock = _now_or_default(now)
         ordered_checks = list(checks)
+
+        # A non-positive limit blocks every send. Check this before opening
+        # the transaction: the seed row insert would otherwise admit one
+        # request per window without ever comparing against max_count.
+        for check in ordered_checks:
+            if check.max_count <= 0:
+                window_start = clock - timedelta(
+                    seconds=int(clock.timestamp()) % check.window_seconds
+                )
+                window_end = window_start + timedelta(seconds=check.window_seconds)
+                return RateLimitDecision(
+                    allowed=False,
+                    exceeded_scope=check.scope,
+                    exceeded_scope_key=check.scope_key,
+                    retry_after_seconds=max(
+                        0, int((window_end - clock).total_seconds())
+                    ),
+                )
+
         try:
             async with self._pool.acquire() as conn:
                 async with conn.transaction():
@@ -751,7 +796,7 @@ class PostgresGrowthRepository:
             """,
             tenant_id,
             source_id,
-            last_run_at,
+            _aware(last_run_at),
             last_error,
         )
 
@@ -777,7 +822,7 @@ class PostgresGrowthRepository:
             lead.body,
             lead.author_public,
             lead.source_url,
-            lead.published_at,
+            _aware(lead.published_at),
             _json(lead.metrics),
             _json_or_none(lead.raw),
             lead.subreddit,
@@ -880,7 +925,7 @@ class PostgresGrowthRepository:
             message.user_id,
             message.rule_key,
             message.status,
-            message.scheduled_at,
+            _aware(message.scheduled_at),
             message.dedupe_key,
             _json(message.metadata),
         )
@@ -966,7 +1011,7 @@ class PostgresGrowthRepository:
             message_id,
             expected_status,
             status,
-            sent_at,
+            _aware(sent_at),
             provider,
             provider_message_id,
             _json_or_none(metadata_patch),
@@ -1025,7 +1070,7 @@ class PostgresGrowthRepository:
             tenant_id,
             version_id,
             approved_by,
-            approved_at,
+            _aware(approved_at),
         )
 
     async def record_delivery(self, entry: NewDeliveryLog) -> None:

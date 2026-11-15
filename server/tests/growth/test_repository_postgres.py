@@ -14,13 +14,16 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import asyncpg
 import pytest
 
 from growth_core.migrate import apply_migrations
 from growth_core.repositories.postgres import PostgresGrowthRepository
 from growth_core.schemas import (
+    GrowthSource,
     NewOutboxMessage,
     NewOutreachMessage,
+    NewOutreachVersion,
     NewSocialLead,
     NewTask,
     RateLimitCheck,
@@ -513,3 +516,275 @@ async def test_update_message_status_is_compare_and_set(repo):
         )
         is False
     )
+
+
+async def test_stale_terminal_writes_are_fenced_and_reclaim_counts_attempts(repo):
+    tenant_id, workspace_id = await _fresh_tenant(repo)
+    await _clear_task6_tasks(repo)
+    t0 = _utc(2018, 2, 1)
+    task_id = await repo.enqueue_task(
+        NewTask(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            pipeline="task6:stale",
+            task_type="social.ingest",
+            idempotency_key="stale:1",
+            priority=-1000,
+            run_after=t0,
+            max_attempts=5,
+        )
+    )
+
+    first_claim = await repo.claim_task("worker-a", now=t0)
+    assert first_claim is not None and first_claim.id == task_id
+
+    reclaimed = await repo.reclaim_stale_tasks(0, now=t0 + timedelta(seconds=1))
+    assert reclaimed >= 1
+    row = await repo._pool.fetchrow(
+        "select status, attempts, locked_by from pipeline_runs where id = $1",
+        task_id,
+    )
+    assert row["status"] == "queued"
+    assert row["attempts"] == 1
+    assert row["locked_by"] is None
+
+    # The original worker must not complete a row it no longer owns.
+    await repo.complete_task(task_id, "worker-a")
+    row = await repo._pool.fetchrow(
+        "select status, attempts from pipeline_runs where id = $1", task_id
+    )
+    assert row["status"] == "queued"
+    assert row["attempts"] == 1
+
+    second_claim = await repo.claim_task(
+        "worker-b", now=t0 + timedelta(seconds=2)
+    )
+    assert second_claim is not None and second_claim.id == task_id
+    assert second_claim.locked_by == "worker-b"
+    assert second_claim.attempts == 1
+
+    # A stale fail from the old worker must not touch the new owner's row.
+    await repo.fail_task(
+        task_id,
+        "stale worker",
+        now=t0 + timedelta(seconds=3),
+        worker_id="worker-a",
+    )
+    row = await repo._pool.fetchrow(
+        "select status, attempts, locked_by from pipeline_runs where id = $1",
+        task_id,
+    )
+    assert row["status"] == "running"
+    assert row["attempts"] == 1
+    assert row["locked_by"] == "worker-b"
+
+    # The current owner can still fail it.
+    await repo.fail_task(
+        task_id,
+        "real failure",
+        now=t0 + timedelta(seconds=3),
+        worker_id="worker-b",
+    )
+    row = await repo._pool.fetchrow(
+        "select status, attempts from pipeline_runs where id = $1", task_id
+    )
+    assert row["status"] == "queued"
+    assert row["attempts"] == 2
+
+
+async def test_outbox_terminal_writes_are_fenced(repo):
+    tenant_id, workspace_id = await _fresh_tenant(repo)
+    t0 = _utc(2019, 2, 1)
+    outbox_id = await repo.enqueue_outbox(
+        NewOutboxMessage(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            topic="feishu.card",
+            payload={},
+            idempotency_key="outbox:fence",
+            next_attempt_at=t0,
+        )
+    )
+
+    # pending -> sent is a no-op.
+    await repo.mark_outbox_sent(outbox_id)
+    row = await repo._pool.fetchrow(
+        "select status, attempts from outbox_messages where id = $1", outbox_id
+    )
+    assert row["status"] == "pending"
+    assert row["attempts"] == 0
+
+    claimed = await repo.claim_outbox(limit=50, now=t0)
+    assert any(item.id == outbox_id for item in claimed)
+
+    # sending -> sent is the valid transition.
+    await repo.mark_outbox_sent(outbox_id)
+    row = await repo._pool.fetchrow(
+        "select status, attempts from outbox_messages where id = $1", outbox_id
+    )
+    assert row["status"] == "sent"
+
+    # sent -> failed is a no-op and must not make the row re-claimable.
+    await repo.mark_outbox_failed(
+        outbox_id, "late failure", now=t0 + timedelta(seconds=1)
+    )
+    row = await repo._pool.fetchrow(
+        "select status, attempts from outbox_messages where id = $1", outbox_id
+    )
+    assert row["status"] == "sent"
+    assert row["attempts"] == 0
+
+
+async def test_rate_limit_zero_max_count_blocks_without_incrementing(repo):
+    tenant_id, _ = await _fresh_tenant(repo)
+    now = _utc(2020, 8, 1, 12, 0)
+    room = RateLimitCheck(
+        scope="global", scope_key="*", max_count=5, window_seconds=86400
+    )
+    blocked = RateLimitCheck(
+        scope="platform", scope_key="reddit", max_count=0, window_seconds=86400
+    )
+
+    decision = await repo.consume_rate_limits(
+        tenant_id, [room, blocked], now=now
+    )
+
+    assert decision.allowed is False
+    assert decision.exceeded_scope == "platform"
+    assert decision.exceeded_scope_key == "reddit"
+    assert decision.retry_after_seconds > 0
+    assert (
+        await repo._pool.fetchval(
+            "select count(*) from rate_limit_counters where tenant_id = $1",
+            tenant_id,
+        )
+        == 0
+    )
+
+
+async def test_naive_model_datetimes_are_stored_as_utc():
+    url = os.environ["GROWTH_TEST_DATABASE_URL"]
+    await apply_migrations(url)
+    # Use a non-UTC session as an extra guard: asyncpg encodes a naive
+    # datetime using the process-local zone, so without normalization the
+    # stored instant would differ from the intended UTC value.
+    pool = await asyncpg.create_pool(
+        url, server_settings={"timezone": "America/New_York"}
+    )
+    repo = PostgresGrowthRepository(pool)
+    try:
+        tenant_id, workspace_id = uuid.uuid4(), uuid.uuid4()
+        await repo.ensure_tenant(tenant_id, workspace_id)
+        await _clear_task6_tasks(repo)
+        naive = datetime(2017, 1, 1, 12, 0)
+        expected = naive.replace(tzinfo=timezone.utc)
+
+        task_id = await repo.enqueue_task(
+            NewTask(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                pipeline="task6:naive-tz",
+                task_type="social.ingest",
+                idempotency_key="naive:run-after",
+                run_after=naive,
+            )
+        )
+        assert (
+            await repo._pool.fetchval(
+                "select run_after from pipeline_runs where id = $1", task_id
+            )
+            == expected
+        )
+
+        outbox_id = await repo.enqueue_outbox(
+            NewOutboxMessage(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                topic="feishu.card",
+                payload={},
+                idempotency_key="naive:outbox",
+                next_attempt_at=naive,
+            )
+        )
+        assert (
+            await repo._pool.fetchval(
+                "select next_attempt_at from outbox_messages where id = $1",
+                outbox_id,
+            )
+            == expected
+        )
+
+        source = GrowthSource(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            source_type="reddit",
+            platform="reddit",
+            dedupe_key="naive:source",
+            last_run_at=naive,
+        )
+        await repo.add_source(source)
+        assert (
+            await repo._pool.fetchval(
+                "select last_run_at from growth_sources where id = $1",
+                source.id,
+            )
+            == expected
+        )
+
+        lead, _ = await repo.upsert_lead(
+            NewSocialLead(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                platform="reddit",
+                platform_post_id="naive-post",
+                source_url="https://example.com/naive",
+                dedupe_key="naive:lead",
+                published_at=naive,
+            )
+        )
+        assert (
+            await repo._pool.fetchval(
+                "select published_at from social_leads where id = $1", lead.id
+            )
+            == expected
+        )
+
+        message = await repo.create_message(
+            NewOutreachMessage(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                channel="social",
+                status="draft_ready",
+                dedupe_key="naive:message",
+                scheduled_at=naive,
+            )
+        )
+        assert (
+            await repo._pool.fetchval(
+                "select scheduled_at from outreach_messages where id = $1",
+                message.id,
+            )
+            == expected
+        )
+
+        version = await repo.create_version(
+            NewOutreachVersion(
+                tenant_id=tenant_id,
+                message_id=message.id,
+                version=1,
+                body_text="body",
+            )
+        )
+        await repo.mark_version_approved(
+            tenant_id, version.id, "operator", naive
+        )
+        assert (
+            await repo._pool.fetchval(
+                "select approved_at from outreach_versions where id = $1",
+                version.id,
+            )
+            == expected
+        )
+    finally:
+        await repo.close()

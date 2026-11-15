@@ -68,10 +68,16 @@ class GrowthRepository(Protocol):
         self, worker_id: str, now: datetime | None = None
     ) -> PipelineTask | None: ...
 
-    async def complete_task(self, task_id: UUID) -> None: ...
+    async def complete_task(
+        self, task_id: UUID, worker_id: str | None = None
+    ) -> None: ...
 
     async def fail_task(
-        self, task_id: UUID, error: str, now: datetime | None = None
+        self,
+        task_id: UUID,
+        error: str,
+        now: datetime | None = None,
+        worker_id: str | None = None,
     ) -> None: ...
 
     async def reclaim_stale_tasks(
