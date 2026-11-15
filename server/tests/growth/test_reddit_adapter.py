@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -159,6 +160,36 @@ async def test_reddit_missing_created_utc_gives_none():
     posts = await adapter.fetch(_source({"subreddit": "saas"}))
 
     assert posts[0].published_at is None
+    await client.aclose()
+
+
+async def test_reddit_out_of_range_created_utc_does_not_abort_fetch():
+    payload = {
+        "data": {
+            "children": [
+                _child(id="inf", created_utc=float("inf")),
+                _child(id="ok"),
+            ]
+        }
+    }
+    # Python's json.loads accepts the non-standard ``Infinity`` literal, so
+    # send it raw rather than through httpx's ``json=`` encoder (which rejects
+    # non-finite floats).
+    body = json.dumps(payload, allow_nan=True).encode()
+    client = _client(
+        lambda request: httpx.Response(
+            200, content=body, headers={"content-type": "application/json"}
+        )
+    )
+    adapter = RedditAdapter(client=client, user_agent="test-agent")
+
+    posts = await adapter.fetch(_source({"subreddit": "saas"}))
+
+    assert [post.platform_post_id for post in posts] == ["inf", "ok"]
+    assert posts[0].published_at is None
+    assert posts[1].published_at == datetime(
+        2023, 11, 14, 22, 13, 20, tzinfo=timezone.utc
+    )
     await client.aclose()
 
 

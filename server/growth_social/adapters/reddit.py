@@ -229,7 +229,7 @@ class RedditAdapter:
         if created_utc is not None:
             try:
                 published_at = datetime.fromtimestamp(created_utc, tz=timezone.utc)
-            except (TypeError, ValueError, OSError):
+            except (OverflowError, TypeError, ValueError, OSError):
                 published_at = None
 
         return RawPost(
