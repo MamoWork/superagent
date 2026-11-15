@@ -1129,8 +1129,8 @@ class GrowthRepository(Protocol):
 
     async def enqueue_task(self, task: NewTask) -> UUID: ...
     async def claim_task(self, worker_id: str, now: datetime | None = None) -> PipelineTask | None: ...
-    async def complete_task(self, task_id: UUID) -> None: ...
-    async def fail_task(self, task_id: UUID, error: str, now: datetime | None = None) -> None: ...
+    async def complete_task(self, task_id: UUID, worker_id: str | None = None) -> None: ...
+    async def fail_task(self, task_id: UUID, error: str, now: datetime | None = None, worker_id: str | None = None) -> None: ...
     async def reclaim_stale_tasks(self, older_than_seconds: int, now: datetime | None = None) -> int: ...
 
     async def enqueue_outbox(self, message: NewOutboxMessage) -> UUID: ...
@@ -1513,6 +1513,8 @@ If no row is returned, select the existing row by `(tenant_id, dedupe_key)` and 
 `claim_outbox(limit, now)` atomically marks up to `limit` rows with `status in ('pending','failed') and next_attempt_at <= $2` as `sending`, using `UPDATE ... WHERE id IN (SELECT id ... FOR UPDATE SKIP LOCKED LIMIT $1) RETURNING *`. `mark_outbox_failed` increments `attempts`, stores the error, and requeues with the same SQL-side backoff, setting `dead` when `attempts >= 5` (the table has no `max_attempts` column).
 
 `count_followups(tenant_id, original_message_id)` counts `outreach_messages` rows whose `metadata->>'followup_of' = $2`. `get_prompt_template` and `get_scoring_rubric` with `version=None` select the highest enabled version.
+
+Terminal writes are fenced. `complete_task` and `fail_task` update only `where id = $1 and status = 'running'` and, when `worker_id` is passed, `and locked_by = $n`; a stale worker whose task was reclaimed no-ops. `mark_outbox_sent` and `mark_outbox_failed` update only `where id = $1 and status = 'sending'`. `reclaim_stale_tasks` increments `attempts` and dead-letters when `attempts + 1 >= max_attempts`; otherwise it requeues with `locked_at/locked_by = null`, so a task that repeatedly kills its worker cannot loop forever. Treat `max_count <= 0` in a rate-limit check as fully blocked with no counter increment. Normalize every model datetime to timezone-aware UTC at the SQL boundary.
 
 Status transitions always use `UPDATE ... WHERE tenant_id=$1 AND id=$2 AND status=$expected` and return `rowcount == 1`. If `rowcount == 0`, return `False`; callers treat it as a concurrency conflict.
 
@@ -2050,7 +2052,7 @@ Expected: FAIL because the worker module does not exist.
 
 - [ ] **Step 3: Implement worker and outbox**
 
-`run_once` claims one task; if none, returns `False`. It dispatches by `task.task_type`; on success calls `repo.complete_task(task.id)` and returns `True`; on exception calls `repo.fail_task(task.id, f"{type(exc).__name__}: {exc}")` and returns `True`. A task that dead-letters is also returned as claimed; the outbox/Feishu alert is a later task.
+`run_once` claims one task; if none, returns `False`. It dispatches by `task.task_type`; on success calls `repo.complete_task(task.id, task.locked_by)` and returns `True`; on exception calls `repo.fail_task(task.id, f"{type(exc).__name__}: {exc}", worker_id=task.locked_by)` and returns `True`. A task that dead-letters is also returned as claimed; the outbox/Feishu alert is a later task.
 
 `run_forever` loops `run_once`, sleeps `poll_seconds` when idle, and exits when `stop.is_set()`.
 
