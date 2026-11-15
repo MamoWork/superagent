@@ -1,0 +1,38 @@
+/* ---------- Pipeline / closed loop ---------- */
+  .funnel{display:flex;align-items:stretch;gap:8px;margin-bottom:16px;overflow-x:auto;padding-bottom:2px}
+  .funnel-step{flex:1;min-width:110px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px 14px}
+  .funnel-step .fv{font-size:22px;font-weight:720;letter-spacing:-.02em}
+  .funnel-step .fl{font-size:11.5px;color:var(--muted);margin-top:1px}
+  .funnel-step.won{background:var(--green-soft);border-color:#a7f3d0}
+  .funnel-step.won .fv{color:var(--green)}
+  .funnel-arrow{align-self:center;color:var(--muted-2);font-size:14px}
+
+  .pipeline-board{
+    display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:11px;
+    overflow-x:auto;padding-bottom:8px;
+  }
+  .pipe-col{background:#eceef2;border-radius:12px;padding:9px;min-height:320px}
+  .pipe-head{display:flex;align-items:center;justify-content:space-between;padding:3px 5px 9px;font-size:12px;font-weight:700;color:#4b5563}
+  .pipe-head .count{background:#fff;border-radius:999px;padding:0 7px;font-size:10.5px;color:var(--muted)}
+  .pipe-card{
+    background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 12px;margin-bottom:8px;
+    box-shadow:0 1px 2px rgba(16,24,40,.03);
+  }
+  .pipe-card.highlight{border-color:#c7d2fe;box-shadow:0 0 0 2px rgba(99,102,241,.08)}
+  .pipe-card h4{font-size:12.6px;margin:6px 0 4px;line-height:1.4}
+  .pipe-card p{font-size:11.5px;color:var(--muted);margin:0 0 7px;line-height:1.5}
+  .pipe-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
+  .pipe-score{font-size:11px;font-weight:700;color:var(--muted)}
+  .pipe-time{font-size:10.5px;color:var(--muted-2)}
+  .pipe-link{display:inline-block;font-size:10.8px;color:var(--accent);text-decoration:none;margin-bottom:6px}
+  .pipe-link:hover{text-decoration:underline}
+  .lead-name{font-size:12.2px;font-weight:650;line-height:1.4}
+  .lead-src{display:block;font-size:10.2px;color:var(--muted-2);font-weight:400;margin-top:1px}
+  .mini-progress{height:4px;background:#eef0f4;border-radius:99px;overflow:hidden;margin:8px 0 6px}
+  .mini-progress span{display:block;height:100%;background:linear-gradient(90deg,#6366f1,#22d3ee)}
+  .pipe-metrics{display:flex;gap:8px;flex-wrap:wrap;font-size:10.2px;color:var(--muted)}
+  .next-action{font-size:10.5px;color:var(--amber);background:var(--amber-soft);border-radius:6px;padding:4px 7px;margin-top:2px}
+  .revenue{font-size:20px;font-weight:750;color:var(--green);letter-spacing:-.02em;margin-top:6px}
+  .revenue span{font-size:10.5px;font-weight:600;color:var(--muted)}
+  .compliance{background:#fafbff;border-color:#dbe3ff}
+  .compliance p{margin:0;font-size:12.5px;color:#4b5563;line-height:1.65}

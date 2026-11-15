@@ -1,0 +1,15 @@
+.DS_Store
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+# Local env and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Logs and local scratch
+*.log
+server/briefs/run_*.json
+server/briefs/run_*.md

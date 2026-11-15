@@ -1,0 +1,38 @@
+/* ---------- Hero ---------- */
+  .hero{padding:26px 2px 24px}
+  .eyebrow{font-size:11px;font-weight:700;letter-spacing:.14em;color:var(--accent);text-transform:uppercase;margin-bottom:10px}
+  .hero h1{font-size:36px;line-height:1.18;letter-spacing:-.025em;margin:0 0 12px;font-weight:750}
+  .hero p{max-width:680px;margin:0;color:var(--muted);font-size:14.5px;line-height:1.65}
+
+/* ---------- Progress ---------- */
+  .progress-panel{display:none}
+  .progress-panel.show{display:block}
+  .steps{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+  .step{display:flex;align-items:center;gap:12px;padding:9px 2px;color:var(--muted);font-size:13px}
+  .step-dot{
+    width:22px;height:22px;border-radius:50%;border:1px solid var(--line-strong);
+    display:grid;place-items:center;font-size:10px;color:var(--muted-2);background:#fff;flex:0 0 22px;
+  }
+  .step.running{color:var(--ink)}
+  .step.running .step-dot{border-color:var(--accent);border-top-color:transparent;animation:spin .8s linear infinite}
+  .step.done{color:#374151}
+  .step.done .step-dot{background:var(--green-soft);border-color:#a7f3d0;color:var(--green)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .step .step-meta{margin-left:auto;font-size:11.5px;color:var(--muted-2)}
+  .progress-bar{height:5px;background:#eef0f4;border-radius:99px;overflow:hidden;margin-top:14px}
+  .progress-bar span{display:block;height:100%;width:0;background:linear-gradient(90deg,#6366f1,#22d3ee);transition:width .45s ease}
+
+  /* ---------- Recent runs ---------- */
+  .section-title{display:flex;align-items:center;justify-content:space-between;margin:26px 2px 12px}
+  .section-title h2{font-size:14.5px;margin:0}
+  .section-title .muted{font-size:12px}
+  .recent-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+  .recent-card{
+    background:#fff;border:1px solid var(--line);border-radius:12px;padding:15px 16px;
+    text-align:left;transition:.15s;box-shadow:0 1px 2px rgba(16,24,40,.03);
+  }
+  .recent-card:hover{border-color:#c7d2fe;transform:translateY(-1px);box-shadow:var(--shadow)}
+  .recent-card .time{font-size:11px;color:var(--muted-2)}
+  .recent-card .title{font-weight:650;font-size:13.2px;margin:5px 0 8px;letter-spacing:-.01em}
+  .recent-card .meta{font-size:11.5px;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .recent-card .mini-badge{background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:2px 8px;font-size:10.5px;font-weight:600}

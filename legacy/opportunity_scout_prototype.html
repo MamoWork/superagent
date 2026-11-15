@@ -1,0 +1,2596 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Opportunity Scout · 商机雷达（本地版原型）</title>
+<link rel="icon" href="data:,">
+<style>
+  :root{
+    --bg:#f4f5f7;
+    --panel:#ffffff;
+    --ink:#111827;
+    --muted:#6b7280;
+    --muted-2:#9ca3af;
+    --line:#e5e7eb;
+    --line-strong:#d1d5db;
+    --accent:#4f46e5;
+    --accent-hover:#4338ca;
+    --accent-soft:#eef2ff;
+    --green:#059669;
+    --green-soft:#ecfdf5;
+    --amber:#d97706;
+    --amber-soft:#fffbeb;
+    --red:#dc2626;
+    --red-soft:#fef2f2;
+    --sidebar:#0b1220;
+    --sidebar-2:#111a2e;
+    --sidebar-ink:#e5e7eb;
+    --sidebar-muted:#8b95a7;
+    --radius:14px;
+    --shadow:0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.06);
+  }
+
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:14px;
+    line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+  }
+  button,input,select,textarea{font:inherit;color:inherit}
+  button{cursor:pointer}
+  a{color:inherit}
+  ::selection{background:#c7d2fe}
+
+  .app{display:flex;min-height:100vh}
+
+  /* ---------- Sidebar ---------- */
+  .sidebar{
+    width:232px;flex:0 0 232px;
+    background:linear-gradient(180deg,var(--sidebar) 0%,var(--sidebar-2) 100%);
+    color:var(--sidebar-ink);
+    padding:22px 14px 16px;
+    display:flex;flex-direction:column;gap:22px;
+    position:sticky;top:0;height:100vh;
+  }
+  .brand{display:flex;align-items:center;gap:11px;padding:0 8px}
+  .brand-mark{
+    width:36px;height:36px;border-radius:11px;
+    background:linear-gradient(135deg,#6366f1,#22d3ee);
+    display:grid;place-items:center;
+    color:#fff;font-weight:800;font-size:18px;
+    box-shadow:0 6px 18px rgba(99,102,241,.35);
+  }
+  .brand-name{font-weight:700;font-size:14.5px;letter-spacing:-.01em;color:#fff}
+  .brand-sub{font-size:11px;color:var(--sidebar-muted);margin-top:1px}
+
+  .nav{display:flex;flex-direction:column;gap:4px}
+  .nav-item{
+    display:flex;align-items:center;gap:10px;
+    width:100%;padding:10px 12px;border:0;border-radius:10px;
+    background:transparent;color:var(--sidebar-muted);
+    text-align:left;font-size:13.5px;transition:.15s;
+  }
+  .nav-item svg{width:17px;height:17px;flex:0 0 17px;opacity:.9}
+  .nav-item:hover{background:rgba(255,255,255,.06);color:#fff}
+  .nav-item.active{background:rgba(99,102,241,.18);color:#fff}
+  .nav-item.active svg{color:#a5b4fc}
+
+  .sidebar-card{
+    margin-top:auto;
+    background:rgba(255,255,255,.05);
+    border:1px solid rgba(255,255,255,.08);
+    border-radius:12px;padding:12px 13px;
+    font-size:12px;color:var(--sidebar-muted);
+  }
+  .sidebar-card strong{display:block;color:#fff;font-size:12.5px;margin-bottom:3px}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#34d399;margin-right:6px;box-shadow:0 0 0 3px rgba(52,211,153,.15)}
+  .sidebar-footer{font-size:10.5px;color:#5b6475;padding:0 8px}
+
+  /* ---------- Main ---------- */
+  .main{flex:1;min-width:0;padding:0 30px 48px}
+  .topbar{
+    height:64px;display:flex;align-items:center;justify-content:space-between;
+    position:sticky;top:0;z-index:20;
+    background:rgba(244,245,247,.86);backdrop-filter:blur(10px);
+    border-bottom:1px solid rgba(229,231,235,.8);
+  }
+  .crumb{font-size:12.5px;color:var(--muted)}
+  .crumb b{color:var(--ink);font-weight:600}
+  .top-actions{display:flex;align-items:center;gap:10px}
+  .status-chip{
+    display:inline-flex;align-items:center;gap:7px;
+    background:#fff;border:1px solid var(--line);border-radius:999px;
+    padding:6px 11px;font-size:12px;color:var(--muted);box-shadow:0 1px 2px rgba(16,24,40,.03);
+  }
+  .status-chip .dot{width:6px;height:6px;margin:0;box-shadow:none}
+  .status-chip b{color:var(--ink);font-weight:600}
+
+  .view{display:none;max-width:1180px;margin:0 auto;padding-top:14px}
+  .view.active{display:block;animation:fade .22s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+
+  /* ---------- Hero ---------- */
+  .hero{padding:26px 2px 24px}
+  .eyebrow{font-size:11px;font-weight:700;letter-spacing:.14em;color:var(--accent);text-transform:uppercase;margin-bottom:10px}
+  .hero h1{font-size:36px;line-height:1.18;letter-spacing:-.025em;margin:0 0 12px;font-weight:750}
+  .hero p{max-width:680px;margin:0;color:var(--muted);font-size:14.5px;line-height:1.65}
+
+  /* ---------- Panels ---------- */
+  .panel{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:22px;
+  }
+  .panel + .panel{margin-top:16px}
+  .panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
+  .panel-head h2{font-size:16px;margin:0;letter-spacing:-.01em}
+  .panel-head .sub{font-size:12.5px;color:var(--muted)}
+
+  /* ---------- Form ---------- */
+  .field-label{display:block;font-size:12.5px;font-weight:600;color:#374151;margin-bottom:7px}
+  .field-label .optional{font-weight:400;color:var(--muted-2)}
+  textarea,input[type=text],input[type=password],input[type=url],select{
+    width:100%;border:1px solid var(--line-strong);border-radius:10px;background:#fff;
+    padding:10px 12px;outline:none;transition:.15s;font-size:13.5px;
+  }
+  textarea{min-height:82px;resize:vertical;line-height:1.6}
+  textarea:focus,input:focus,select:focus{border-color:#a5b4fc;box-shadow:0 0 0 3px rgba(99,102,241,.13)}
+  textarea::placeholder,input::placeholder{color:#a6adba}
+
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin:10px 0 18px}
+  .chip{
+    border:1px solid var(--line);background:#fafafa;border-radius:999px;
+    padding:5px 11px;font-size:12px;color:#4b5563;transition:.15s;
+  }
+  .chip:hover{border-color:#c7d2fe;background:var(--accent-soft);color:var(--accent)}
+
+  .form-grid{display:grid;grid-template-columns:1.1fr .85fr .72fr .72fr 1.5fr;gap:14px;margin-bottom:20px}
+  .field{min-width:0}
+  .select-row{display:flex;gap:7px}
+  .select-row select{flex:1}
+
+  .sources-block{border-top:1px solid var(--line);padding-top:18px;margin-top:2px}
+  .source-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:9px}
+  .source-grid-wide{grid-template-columns:repeat(5,minmax(0,1fr))}
+  .sources-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .sources-tools{display:flex;align-items:center;gap:8px}
+  .source-count{font-size:11.5px;color:var(--muted)}
+  .source-group-title{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted-2);margin:15px 0 0}
+  .form-actions{display:flex;gap:8px;align-items:center}
+
+  .schedule-sources{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;max-height:168px;overflow:auto;padding:2px}
+  .schedule-sources label{display:flex;align-items:center;gap:6px;font-size:11.3px;border:1px solid var(--line);border-radius:7px;padding:6px 8px;background:#fff;cursor:pointer}
+  .schedule-sources label:hover{border-color:#c7d2fe;background:#fcfcff}
+  .schedule-sources input{accent-color:var(--accent);margin:0}
+  .modal-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .sched-sub{font-size:10.8px;color:var(--muted-2);margin-top:2px}
+  .sched-task b{font-size:12.5px}
+  .source-opt{
+    display:flex;gap:9px;align-items:flex-start;
+    border:1px solid var(--line);border-radius:11px;padding:11px 12px;
+    cursor:pointer;transition:.15s;background:#fff;
+  }
+  .source-opt:hover{border-color:#c7d2fe;background:#fcfcff}
+  .source-opt input{margin:3px 0 0;accent-color:var(--accent)}
+  .source-opt .name{display:block;font-size:12.8px;font-weight:600;line-height:1.35}
+  .source-opt .meta{display:block;font-size:11px;color:var(--muted);margin-top:2px;line-height:1.35}
+  .source-opt .meta.warn{color:var(--amber)}
+  .source-opt .meta.ok{color:var(--green)}
+  .source-opt.is-off{opacity:.55;background:#fafafa;cursor:not-allowed}
+  .source-opt.is-off input{accent-color:#cbd5e1}
+  .source-opt .meta.off{color:#9ca3af}
+
+  .form-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:22px}
+  .hint{font-size:11.5px;color:var(--muted-2)}
+
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:7px;
+    border:1px solid var(--line-strong);background:#fff;border-radius:9px;
+    padding:8px 13px;font-size:12.8px;font-weight:600;transition:.15s;white-space:nowrap;
+  }
+  .btn:hover{background:#f9fafb;border-color:#cbd2dc}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 4px 12px rgba(79,70,229,.22)}
+  .btn.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+  .btn.large{padding:11px 20px;font-size:13.5px;border-radius:10px}
+  .btn.small{padding:6px 10px;font-size:12px}
+  .btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+  .btn.ghost:hover{background:#f3f4f6;color:var(--ink)}
+  .btn:disabled{opacity:.55;cursor:not-allowed}
+  .arrow{font-size:15px;line-height:1;transform:translateY(-1px)}
+
+  /* ---------- Progress ---------- */
+  .progress-panel{display:none}
+  .progress-panel.show{display:block}
+  .steps{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+  .step{display:flex;align-items:center;gap:12px;padding:9px 2px;color:var(--muted);font-size:13px}
+  .step-dot{
+    width:22px;height:22px;border-radius:50%;border:1px solid var(--line-strong);
+    display:grid;place-items:center;font-size:10px;color:var(--muted-2);background:#fff;flex:0 0 22px;
+  }
+  .step.running{color:var(--ink)}
+  .step.running .step-dot{border-color:var(--accent);border-top-color:transparent;animation:spin .8s linear infinite}
+  .step.done{color:#374151}
+  .step.done .step-dot{background:var(--green-soft);border-color:#a7f3d0;color:var(--green)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .step .step-meta{margin-left:auto;font-size:11.5px;color:var(--muted-2)}
+  .progress-bar{height:5px;background:#eef0f4;border-radius:99px;overflow:hidden;margin-top:14px}
+  .progress-bar span{display:block;height:100%;width:0;background:linear-gradient(90deg,#6366f1,#22d3ee);transition:width .45s ease}
+
+  /* ---------- Recent runs ---------- */
+  .section-title{display:flex;align-items:center;justify-content:space-between;margin:26px 2px 12px}
+  .section-title h2{font-size:14.5px;margin:0}
+  .section-title .muted{font-size:12px}
+  .recent-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+  .recent-card{
+    background:#fff;border:1px solid var(--line);border-radius:12px;padding:15px 16px;
+    text-align:left;transition:.15s;box-shadow:0 1px 2px rgba(16,24,40,.03);
+  }
+  .recent-card:hover{border-color:#c7d2fe;transform:translateY(-1px);box-shadow:var(--shadow)}
+  .recent-card .time{font-size:11px;color:var(--muted-2)}
+  .recent-card .title{font-weight:650;font-size:13.2px;margin:5px 0 8px;letter-spacing:-.01em}
+  .recent-card .meta{font-size:11.5px;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .recent-card .mini-badge{background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:2px 8px;font-size:10.5px;font-weight:600}
+
+  /* ---------- Results ---------- */
+  .view-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:8px 2px 18px}
+  .view-head h1{font-size:26px;letter-spacing:-.02em;margin:0 0 6px;font-weight:720}
+  .view-head .muted{color:var(--muted);font-size:13px}
+  .head-actions{display:flex;gap:8px;margin-top:6px}
+
+  .run-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}
+  .stat{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .stat .label{font-size:11.5px;color:var(--muted)}
+  .stat .value{font-size:24px;font-weight:720;letter-spacing:-.02em;margin-top:2px}
+  .stat .value small{font-size:12px;font-weight:500;color:var(--muted);letter-spacing:0}
+
+  .toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px 0 14px}
+  .tabs{display:inline-flex;background:#eceef2;border-radius:10px;padding:3px;gap:2px}
+  .tab{border:0;background:transparent;border-radius:8px;padding:6px 12px;font-size:12.3px;color:var(--muted);font-weight:600}
+  .tab.active{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(16,24,40,.08)}
+  .toolbar .hint{font-size:11.5px;color:var(--muted-2)}
+
+  .opp-list{display:flex;flex-direction:column;gap:13px}
+  .opp-card{
+    display:flex;gap:18px;background:#fff;border:1px solid var(--line);border-radius:var(--radius);
+    padding:19px 20px;box-shadow:0 1px 2px rgba(16,24,40,.03);transition:.15s;
+  }
+  .opp-card:hover{border-color:#dbe0ea;box-shadow:var(--shadow)}
+  .score-ring{
+    --score:80;--ring:#059669;
+    width:66px;height:66px;border-radius:50%;flex:0 0 66px;
+    background:conic-gradient(var(--ring) calc(var(--score) * 1%), #eef0f4 0);
+    display:grid;place-items:center;margin-top:2px;
+  }
+  .score-ring .inner{
+    width:52px;height:52px;border-radius:50%;background:#fff;display:grid;place-items:center;
+    font-weight:750;font-size:17px;letter-spacing:-.02em;color:var(--ink);
+  }
+  .opp-main{flex:1;min-width:0}
+  .opp-top{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+  .opp-top h3{font-size:15.5px;margin:3px 0 0;letter-spacing:-.015em;line-height:1.4}
+  .opp-actions{display:flex;gap:6px;flex:0 0 auto}
+  .badge{display:inline-block;border-radius:999px;padding:2px 9px;font-size:10.5px;font-weight:700;letter-spacing:.01em}
+  .badge.high{background:var(--green-soft);color:var(--green)}
+  .badge.verify{background:var(--amber-soft);color:var(--amber)}
+  .badge.red{background:var(--red-soft);color:var(--red)}
+  .badge.ghost{background:#f3f4f6;color:var(--muted);font-weight:600}
+
+  .opp-pain{margin:9px 0 11px;color:#374151;font-size:13.3px;line-height:1.62}
+  .opp-meta{display:grid;grid-template-columns:1fr 1fr;gap:8px 22px;margin-bottom:12px}
+  .meta-item{font-size:12px;color:var(--muted);line-height:1.5}
+  .meta-item b{color:#374151;font-weight:600}
+
+  .evidence{border-top:1px dashed var(--line);padding-top:11px}
+  .evidence-label{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted-2);margin-bottom:7px}
+  .source-link{
+    display:flex;gap:9px;align-items:flex-start;padding:8px 9px;margin:0 -9px;border-radius:8px;
+    text-decoration:none;transition:.15s;
+  }
+  .source-link:hover{background:#f8f9fc}
+  .source-link .ico{width:15px;height:15px;flex:0 0 15px;margin-top:2px;color:var(--accent)}
+  .source-link .src-body{min-width:0}
+  .source-link .src-title{font-size:12.2px;font-weight:600;color:#374151;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .source-link:hover .src-title{color:var(--accent)}
+  .source-link .src-meta{display:block;font-size:10.8px;color:var(--muted-2);margin-top:1px}
+  .source-link .quote{
+    display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;
+    font-size:11.8px;color:var(--muted);margin-top:4px;line-height:1.5;font-style:italic;
+  }
+  .source-link .quote::before{content:"“"}
+  .source-link .quote::after{content:"”"}
+  .ext{font-size:10px;color:var(--muted-2);font-weight:400}
+
+  .tag-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+  .tag{background:#f3f4f6;border-radius:6px;padding:2px 8px;font-size:10.8px;color:#4b5563}
+  .tag.risk{background:var(--red-soft);color:#b91c1c}
+
+  /* ---------- Pipeline / closed loop ---------- */
+  .funnel{display:flex;align-items:stretch;gap:8px;margin-bottom:16px;overflow-x:auto;padding-bottom:2px}
+  .funnel-step{flex:1;min-width:110px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px 14px}
+  .funnel-step .fv{font-size:22px;font-weight:720;letter-spacing:-.02em}
+  .funnel-step .fl{font-size:11.5px;color:var(--muted);margin-top:1px}
+  .funnel-step.won{background:var(--green-soft);border-color:#a7f3d0}
+  .funnel-step.won .fv{color:var(--green)}
+  .funnel-arrow{align-self:center;color:var(--muted-2);font-size:14px}
+
+  .pipeline-board{
+    display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:11px;
+    overflow-x:auto;padding-bottom:8px;
+  }
+  .pipe-col{background:#eceef2;border-radius:12px;padding:9px;min-height:320px}
+  .pipe-head{display:flex;align-items:center;justify-content:space-between;padding:3px 5px 9px;font-size:12px;font-weight:700;color:#4b5563}
+  .pipe-head .count{background:#fff;border-radius:999px;padding:0 7px;font-size:10.5px;color:var(--muted)}
+  .pipe-card{
+    background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 12px;margin-bottom:8px;
+    box-shadow:0 1px 2px rgba(16,24,40,.03);
+  }
+  .pipe-card.highlight{border-color:#c7d2fe;box-shadow:0 0 0 2px rgba(99,102,241,.08)}
+  .pipe-card h4{font-size:12.6px;margin:6px 0 4px;line-height:1.4}
+  .pipe-card p{font-size:11.5px;color:var(--muted);margin:0 0 7px;line-height:1.5}
+  .pipe-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
+  .pipe-score{font-size:11px;font-weight:700;color:var(--muted)}
+  .pipe-time{font-size:10.5px;color:var(--muted-2)}
+  .pipe-link{display:inline-block;font-size:10.8px;color:var(--accent);text-decoration:none;margin-bottom:6px}
+  .pipe-link:hover{text-decoration:underline}
+  .lead-name{font-size:12.2px;font-weight:650;line-height:1.4}
+  .lead-src{display:block;font-size:10.2px;color:var(--muted-2);font-weight:400;margin-top:1px}
+  .mini-progress{height:4px;background:#eef0f4;border-radius:99px;overflow:hidden;margin:8px 0 6px}
+  .mini-progress span{display:block;height:100%;background:linear-gradient(90deg,#6366f1,#22d3ee)}
+  .pipe-metrics{display:flex;gap:8px;flex-wrap:wrap;font-size:10.2px;color:var(--muted)}
+  .next-action{font-size:10.5px;color:var(--amber);background:var(--amber-soft);border-radius:6px;padding:4px 7px;margin-top:2px}
+  .revenue{font-size:20px;font-weight:750;color:var(--green);letter-spacing:-.02em;margin-top:6px}
+  .revenue span{font-size:10.5px;font-weight:600;color:var(--muted)}
+  .compliance{background:#fafbff;border-color:#dbe3ff}
+  .compliance p{margin:0;font-size:12.5px;color:#4b5563;line-height:1.65}
+
+  /* ---------- Tables ---------- */
+  .table-wrap{background:#fff;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.03)}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:12px 16px;font-size:12.5px;border-bottom:1px solid #f0f1f4}
+  th{background:#fafbfc;color:var(--muted);font-weight:600;font-size:11.5px}
+  tr:last-child td{border-bottom:0}
+  td .link{color:var(--accent);text-decoration:none;font-weight:600}
+  td .link:hover{text-decoration:underline}
+  .state{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600}
+  .state.done{color:var(--green)}
+  .state.empty{color:var(--muted-2)}
+  .state .dot{width:6px;height:6px;margin:0;box-shadow:none;background:currentColor}
+
+  /* ---------- Settings ---------- */
+  .settings-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;align-items:start}
+  .provider{
+    border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px;transition:.15s;
+  }
+  .provider.default{border-color:#c7d2fe;background:#fcfcff}
+  .provider-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+  .provider-head .name{font-weight:650;font-size:13px}
+  .provider-head label{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:5px}
+  .provider .field{margin-top:9px}
+  .provider .field label{font-size:11px;color:var(--muted);display:block;margin-bottom:4px}
+  .provider .field input{padding:8px 10px;font-size:12.5px}
+  .settings-actions{display:flex;gap:8px;margin-top:16px}
+  .toggle-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #f0f1f4;font-size:12.5px}
+  .toggle-row:last-child{border-bottom:0}
+  .toggle{position:relative;width:36px;height:20px;flex:0 0 36px}
+  .toggle input{opacity:0;width:0;height:0}
+  .toggle span{position:absolute;inset:0;background:#d1d5db;border-radius:99px;transition:.2s}
+  .toggle span::after{content:"";position:absolute;width:16px;height:16px;left:2px;top:2px;background:#fff;border-radius:50%;transition:.2s}
+  .toggle input:checked + span{background:var(--accent)}
+  .toggle input:checked + span::after{transform:translateX(16px)}
+
+  /* ---------- Modal ---------- */
+  .modal{position:fixed;inset:0;z-index:100;display:none;align-items:center;justify-content:center;padding:24px}
+  .modal.show{display:flex}
+  .modal-backdrop{position:absolute;inset:0;background:rgba(15,23,42,.42);backdrop-filter:blur(2px)}
+  .dialog{
+    position:relative;width:min(760px,100%);max-height:86vh;overflow:auto;
+    background:#fff;border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.25);
+    padding:26px 28px;animation:pop .18s ease;
+  }
+  @keyframes pop{from{opacity:0;transform:scale(.985) translateY(4px)}to{opacity:1;transform:none}}
+  .dialog-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:6px}
+  .dialog-head h2{font-size:20px;letter-spacing:-.02em;margin:4px 0 0;line-height:1.35}
+  .close-btn{border:0;background:#f3f4f6;width:30px;height:30px;border-radius:50%;font-size:17px;color:var(--muted);flex:0 0 30px}
+  .close-btn:hover{background:#e5e7eb;color:var(--ink)}
+  .detail-block{padding:13px 0;border-bottom:1px solid #f0f1f4}
+  .detail-block:last-child{border-bottom:0}
+  .detail-block .label{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted-2);margin-bottom:5px}
+  .detail-block p{margin:0;font-size:13px;color:#374151;line-height:1.65}
+  .dialog-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+
+  /* ---------- Toast ---------- */
+  .toast{
+    position:fixed;left:50%;bottom:30px;transform:translate(-50%,16px);
+    background:#111827;color:#fff;border-radius:10px;padding:10px 16px;font-size:12.5px;
+    box-shadow:0 12px 30px rgba(15,23,42,.24);opacity:0;pointer-events:none;transition:.22s;z-index:200;
+  }
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+
+  /* ---------- Misc ---------- */
+  .muted{color:var(--muted)}
+  .hidden{display:none !important}
+  .prototype-note{
+    display:inline-flex;align-items:center;gap:6px;background:#fffbeb;border:1px solid #fde68a;
+    color:#92400e;border-radius:8px;padding:5px 10px;font-size:11.5px;font-weight:600;
+  }
+  .empty-state{background:#fff;border:1px dashed var(--line-strong);border-radius:14px;padding:46px 20px;text-align:center;color:var(--muted)}
+  .empty-state b{display:block;color:var(--ink);margin-bottom:5px}
+
+  @media (max-width:1080px){
+    .form-grid{grid-template-columns:1fr 1fr}
+    .source-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .recent-grid{grid-template-columns:1fr 1fr}
+    .settings-grid{grid-template-columns:1fr}
+    .pipeline-board{grid-template-columns:repeat(6,215px)}
+  }
+  @media (max-width:860px){
+    .sidebar{width:70px;flex-basis:70px;padding:18px 9px}
+    .brand-name,.brand-sub,.nav-item span,.sidebar-card,.sidebar-footer{display:none}
+    .brand{justify-content:center;padding:0}
+    .nav-item{justify-content:center;padding:11px}
+    .main{padding:0 16px 36px}
+    .hero h1{font-size:28px}
+    .run-stats{grid-template-columns:1fr 1fr}
+    .opp-card{flex-direction:column}
+    .score-ring{margin-top:0}
+    .form-grid,.source-grid,.recent-grid{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ Sidebar ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">◎</div>
+      <div>
+        <div class="brand-name">Opportunity Scout</div>
+        <div class="brand-sub">商机雷达 · 本地版</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item active" data-view="new">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M11 8v6M8 11h6" stroke-linecap="round"/></svg>
+        <span>新建采集</span>
+      </button>
+      <button class="nav-item" data-view="results">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V5m0 14h16M8 14l3-4 3 2 4-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>机会分析</span>
+      </button>
+      <button class="nav-item" data-view="pipeline">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h6" stroke-linecap="round"/><circle cx="19" cy="18" r="2"/></svg>
+        <span>获取闭环</span>
+      </button>
+      <button class="nav-item" data-view="schedules">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18" stroke-linecap="round"/><path d="M8 14h2M14 14h2M8 18h2M14 18h2" stroke-linecap="round"/></svg>
+        <span>定时任务</span>
+      </button>
+      <button class="nav-item" data-view="history">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2" stroke-linecap="round"/></svg>
+        <span>采集历史</span>
+      </button>
+      <button class="nav-item" data-view="library">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4-7 4V5a1 1 0 0 1 1-1Z" stroke-linejoin="round"/></svg>
+        <span>机会库</span>
+      </button>
+      <button class="nav-item" data-view="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1Z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>设置</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-card">
+      <strong><span class="dot"></span>本地运行</strong>
+      数据与配置只保存在本机，不上传云端。
+    </div>
+    <div class="sidebar-footer">v0.1 原型 · 示例数据</div>
+  </aside>
+
+  <!-- ============ Main ============ -->
+  <main class="main">
+    <header class="topbar">
+      <div class="crumb">工作台 / <b id="crumbCurrent">新建采集</b></div>
+      <div class="top-actions">
+        <span class="status-chip" id="apiStatusChip" title="点击重试连接 API" style="cursor:pointer"><span class="dot" style="background:#94a3b8"></span>API：<b>未连接</b></span>
+        <span class="prototype-note" id="dataModeNote">mock data</span>
+        <button class="btn small" data-view="settings">设置</button>
+      </div>
+    </header>
+
+    <!-- ---------- View: New ---------- -->
+    <section class="view active" id="view-new">
+      <div class="hero">
+        <div class="eyebrow">Business Opportunity Radar</div>
+        <h1>告诉我一个方向，<br>我去把真实需求找回来。</h1>
+        <p>输入关键词或一句描述，自动调用已接入的数据源（社区、网页、市场平台、RSS 等）采集公开信号，用你配置的 AI 提炼痛点、付费意愿与风险；确认机会后，一键进入验证、线索采集与人工触达的获取闭环。每条结论都带可点击的源链接。</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>新建采集</h2>
+          <span class="badge ghost">约 30–60 秒</span>
+        </div>
+
+        <label class="field-label" for="direction">方向描述</label>
+        <textarea id="direction" placeholder="例：Amazon 宠物饮水机细分，低评论高客单的机会在哪里？"></textarea>
+        <div class="chips" id="exampleChips">
+          <button class="chip" data-fill="Amazon 宠物饮水机细分，低评论高客单的机会在哪里？">跨境选品机会</button>
+          <button class="chip" data-fill="跨境卖家在客服和售后环节，有哪些重复劳动可以用工具解决？">跨境卖家客服</button>
+          <button class="chip" data-fill="独立开发者获取前 100 个付费用户时，最常遇到的困难是什么？">独立开发获客</button>
+          <button class="chip" data-fill="房产经纪人做短视频营销时，字幕和剪辑环节有什么痛点？">房产经纪视频字幕</button>
+          <button class="chip" data-fill="小型本地生活商家在预约、排班和客户跟进上有什么未被满足的需求？">本地生活 SaaS</button>
+        </div>
+
+        <div class="form-grid">
+          <div class="field">
+            <label class="field-label" for="keywords">关键词 <span class="optional">（可选，逗号分隔）</span></label>
+            <input type="text" id="keywords" placeholder="pet water fountain, stainless steel">
+          </div>
+          <div class="field">
+            <label class="field-label" for="domainPack">机会类型</label>
+            <select id="domainPack">
+              <option value="general" selected>自动识别 / 通用</option>
+              <option value="saas">软件 / SaaS</option>
+              <option value="crossborder">跨境电商</option>
+              <option value="general">本地生活</option>
+              <option value="general">内容 / 房产</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label" for="range">时间范围</label>
+            <select id="range">
+              <option value="30">最近 30 天</option>
+              <option value="90" selected>最近 90 天</option>
+              <option value="365">最近 1 年</option>
+              <option value="0">不限时间</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label" for="limit">每个来源最多</label>
+            <select id="limit">
+              <option value="10">10 条</option>
+              <option value="20" selected>20 条</option>
+              <option value="50">50 条</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label" for="aiEngine">AI 引擎</label>
+            <div class="select-row">
+              <select id="aiEngine">
+                <option selected>DeepSeek V3（OpenAI 兼容）</option>
+                <option>GPT-4o</option>
+                <option>Claude Sonnet</option>
+                <option>Ollama · 本地模型</option>
+              </select>
+              <button class="btn ghost small" data-view="settings" title="配置 AI 引擎">配置</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="sources-block">
+          <div class="sources-head">
+            <div class="field-label" style="margin:0">采集来源 <span class="optional">（统一 Provider API，均可选）</span></div>
+            <div class="sources-tools">
+              <span class="source-count" id="sourceCount">已选 3 个</span>
+              <button class="btn ghost small" id="toggleAllSources" type="button">全选已接入源</button>
+            </div>
+          </div>
+          <div class="source-group-title">Agent-Reach 适配器</div>
+          <div class="source-grid source-grid-wide" id="agentReachSources"></div>
+          <div class="source-group-title">其他适配器</div>
+          <div class="source-grid" id="otherSources"></div>
+        </div>
+
+        <div class="form-footer">
+          <div class="hint">仅采集公开内容；结果用于调研，不自动发帖或联系用户。</div>
+          <div class="form-actions">
+            <button class="btn" id="saveScheduleBtn" type="button">存为定时任务</button>
+            <button class="btn primary large" id="startBtn">开始采集与分析 <span class="arrow">→</span></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel progress-panel" id="progressPanel">
+        <div class="panel-head">
+          <h2>正在采集与分析</h2>
+          <span class="badge ghost" id="progressPct">0%</span>
+        </div>
+        <div class="steps" id="steps">
+          <div class="step" data-step="0"><span class="step-dot">1</span><span>解析方向与关键词</span><span class="step-meta">准备查询</span></div>
+          <div class="step" data-step="1"><span class="step-dot">2</span><span>调用社区信号适配器</span><span class="step-meta">等待中</span></div>
+          <div class="step" data-step="2"><span class="step-dot">3</span><span>调用网页 / 市场平台适配器</span><span class="step-meta">等待中</span></div>
+          <div class="step" data-step="3"><span class="step-dot">4</span><span>去重、相关性过滤</span><span class="step-meta">等待中</span></div>
+          <div class="step" data-step="4"><span class="step-dot">5</span><span>AI 提炼痛点、付费信号与风险</span><span class="step-meta">等待中</span></div>
+          <div class="step" data-step="5"><span class="step-dot">6</span><span>生成机会卡与来源链接</span><span class="step-meta">等待中</span></div>
+        </div>
+        <div class="progress-bar"><span id="progressFill"></span></div>
+      </div>
+
+      <div class="section-title">
+        <h2>最近的采集</h2>
+        <span class="muted">本机历史 · 点击查看</span>
+      </div>
+      <div class="recent-grid" id="recentGrid">
+        <button class="recent-card" data-view="results">
+          <div class="time">今天 13:42</div>
+          <div class="title">房产视频字幕</div>
+          <div class="meta"><span class="mini-badge">4 个机会</span><span>42 条信号 · 38s</span></div>
+        </button>
+        <button class="recent-card" data-view="results">
+          <div class="time">昨天 21:10</div>
+          <div class="title">独立开发工具</div>
+          <div class="meta"><span class="mini-badge">3 个机会</span><span>36 条信号 · 31s</span></div>
+        </button>
+        <button class="recent-card" data-view="history">
+          <div class="time">11 月 4 日 18:05</div>
+          <div class="title">跨境卖家客服</div>
+          <div class="meta"><span class="mini-badge">2 个机会</span><span>28 条信号 · 27s</span></div>
+        </button>
+      </div>
+    </section>
+
+    <!-- ---------- View: Results ---------- -->
+    <section class="view" id="view-results">
+      <div class="view-head">
+        <div>
+          <div class="eyebrow">Run #2026-11-06-01</div>
+          <h1>房产视频字幕 · 机会分析</h1>
+          <div class="muted">42 条原始信号 → 23 条相关 → 4 个机会 · 用时 38s · 来源：Reddit / Web / HN</div>
+        </div>
+        <div class="head-actions">
+          <button class="btn" id="exportBtn">导出 JSON</button>
+          <button class="btn primary" data-view="new">新建采集</button>
+        </div>
+      </div>
+
+      <div class="run-stats">
+        <div class="stat"><div class="label">原始信号</div><div class="value">42</div></div>
+        <div class="stat"><div class="label">去重后相关</div><div class="value">23</div></div>
+        <div class="stat"><div class="label">归纳机会</div><div class="value">4</div></div>
+        <div class="stat"><div class="label">高机会</div><div class="value" style="color:var(--green)">1 <small>个</small></div></div>
+      </div>
+
+      <div class="toolbar">
+        <div class="tabs" id="filterTabs">
+          <button class="tab active" data-filter="all">全部 4</button>
+          <button class="tab" data-filter="high">高机会 1</button>
+          <button class="tab" data-filter="verify">待验证 2</button>
+          <button class="tab" data-filter="red">红海 1</button>
+        </div>
+        <div class="hint">每条机会均附原始链接，可直接打开核对</div>
+      </div>
+
+      <div class="opp-list" id="oppList"></div>
+    </section>
+
+    <!-- ---------- View: Pipeline ---------- -->
+    <section class="view" id="view-pipeline">
+      <div class="view-head">
+        <div>
+          <div class="eyebrow">Discovery → Validation → Acquisition</div>
+          <h1>获取闭环</h1>
+          <div class="muted">从公开信号到线索、验证、人工触达与成交，全程在本机完成；每条线索都保留来源链接。</div>
+        </div>
+        <div class="head-actions">
+          <button class="btn" id="exportLeadsBtn">导出线索 CSV</button>
+          <button class="btn primary" data-view="results">回到机会分析</button>
+        </div>
+      </div>
+
+      <div class="funnel">
+        <div class="funnel-step"><div class="fv">4</div><div class="fl">发现机会</div></div>
+        <div class="funnel-arrow">→</div>
+        <div class="funnel-step"><div class="fv">2</div><div class="fl">进入验证</div></div>
+        <div class="funnel-arrow">→</div>
+        <div class="funnel-step"><div class="fv">18</div><div class="fl">采集线索</div></div>
+        <div class="funnel-arrow">→</div>
+        <div class="funnel-step"><div class="fv">7</div><div class="fl">已触达</div></div>
+        <div class="funnel-arrow">→</div>
+        <div class="funnel-step"><div class="fv">3</div><div class="fl">已回复</div></div>
+        <div class="funnel-arrow">→</div>
+        <div class="funnel-step won"><div class="fv">1</div><div class="fl">已转化</div></div>
+      </div>
+
+      <div class="pipeline-board">
+        <div class="pipe-col">
+          <div class="pipe-head"><span>待验证</span><span class="count">2</span></div>
+          <article class="pipe-card">
+            <div class="pipe-top"><span class="badge verify">待验证</span><span class="pipe-score">68</span></div>
+            <h4>网页版 SRT 时间轴修正</h4>
+            <p>自动字幕时间轴错位，逐条拖动耗时。</p>
+            <a class="pipe-link" href="https://www.reddit.com/r/indiehackers/comments/1g8qqqi/tell_me_1_tool_you_need_and_ill_go_looking_for/" target="_blank" rel="noopener">r/indiehackers ↗</a>
+            <button class="btn ghost small" data-detail="subtitle-timing">查看机会</button>
+          </article>
+          <article class="pipe-card">
+            <div class="pipe-top"><span class="badge red">红海</span><span class="pipe-score">45</span></div>
+            <h4>AI 工具导航站</h4>
+            <p>同质化严重，用户已疲劳。</p>
+            <a class="pipe-link" href="https://www.reddit.com/r/InternetIsBeautiful/comments/11e314l/theres_an_ai_for_that_find_ai_tools_using_ai/" target="_blank" rel="noopener">r/InternetIsBeautiful ↗</a>
+            <button class="btn ghost small" data-detail="tool-directory">查看机会</button>
+          </article>
+        </div>
+
+        <div class="pipe-col">
+          <div class="pipe-head"><span>验证中</span><span class="count">1</span></div>
+          <article class="pipe-card highlight">
+            <div class="pipe-top"><span class="badge high">高机会</span><span class="pipe-score">86</span></div>
+            <h4>房产批量品牌化字幕</h4>
+            <p>Landing page 47 次访问，6 次访谈，2 个预售。</p>
+            <div class="mini-progress"><span style="width:62%"></span></div>
+            <div class="pipe-metrics"><span>47 visits</span><span>6 访谈</span><span>2 预售</span></div>
+            <button class="btn ghost small" data-detail="realtor-captions">查看实验</button>
+          </article>
+        </div>
+
+        <div class="pipe-col">
+          <div class="pipe-head"><span>线索池</span><span class="count">18</span></div>
+          <article class="pipe-card lead">
+            <div class="lead-name">房产摄影师 A <span class="lead-src">r/RealEstatePhotography</span></div>
+            <p>求字幕模板，"逐词做太耗时间"。</p>
+            <a class="pipe-link" href="https://www.reddit.com/r/RealEstatePhotography/comments/1tmf5my/tiktokreel_realtor_captions/" target="_blank" rel="noopener">查看原帖 ↗</a>
+            <button class="btn ghost small" data-lead="lead-a">生成话术</button>
+          </article>
+          <article class="pipe-card lead">
+            <div class="lead-name">房产营销代理 B <span class="lead-src">r/AIContentAutomators</span></div>
+            <p>客户多到剪不过来，想自动化字幕与剪辑。</p>
+            <a class="pipe-link" href="https://www.reddit.com/r/AIContentAutomators/comments/1pq7k2x/running_a_real_estate_marketing_agency_in_texas/" target="_blank" rel="noopener">查看原帖 ↗</a>
+            <button class="btn ghost small" data-lead="lead-b">生成话术</button>
+          </article>
+          <article class="pipe-card lead">
+            <div class="lead-name">摄影工作室 C <span class="lead-src">r/RealEstatePhotography</span></div>
+            <p>用 CapCut + Canva，关注品牌一致性。</p>
+            <a class="pipe-link" href="https://www.reddit.com/r/RealEstatePhotography/comments/1rqya57/what_ai_video_tools_are_you_using_for_real_estate/" target="_blank" rel="noopener">查看原帖 ↗</a>
+            <button class="btn ghost small" data-lead="lead-c">生成话术</button>
+          </article>
+        </div>
+
+        <div class="pipe-col">
+          <div class="pipe-head"><span>已触达</span><span class="count">7</span></div>
+          <article class="pipe-card">
+            <div class="pipe-top"><span class="badge ghost">已发送</span><span class="pipe-time">2 天前</span></div>
+            <h4>房产摄影师 A</h4>
+            <p>Reddit 私信（手动）· 已查看</p>
+            <div class="next-action">下一步：11-07 跟进</div>
+          </article>
+          <article class="pipe-card">
+            <div class="pipe-top"><span class="badge ghost">已发送</span><span class="pipe-time">3 天前</span></div>
+            <h4>摄影工作室 C</h4>
+            <p>邮件（手动）· 等待回复</p>
+            <div class="next-action">下一步：11-08 跟进</div>
+          </article>
+        </div>
+
+        <div class="pipe-col">
+          <div class="pipe-head"><span>跟进中</span><span class="count">3</span></div>
+          <article class="pipe-card highlight">
+            <div class="pipe-top"><span class="badge verify">已回复</span><span class="pipe-time">今天</span></div>
+            <h4>房产营销代理 B</h4>
+            <p>约了 11-08 10:00 的 15 分钟访谈。</p>
+            <div class="next-action">准备：演示批量模板 + 定价页</div>
+          </article>
+        </div>
+
+        <div class="pipe-col">
+          <div class="pipe-head"><span>已转化</span><span class="count">1</span></div>
+          <article class="pipe-card won">
+            <div class="pipe-top"><span class="badge high">已付费</span><span class="pipe-time">今天</span></div>
+            <h4>摄影工作室 C</h4>
+            <p>预售 3 个席位 × $29/月</p>
+            <div class="revenue">$87 <span>MRR</span></div>
+          </article>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:16px">
+        <div class="panel-head"><h2>验证实验</h2><span class="badge ghost">Landing page + 用户访谈</span></div>
+        <div class="table-wrap" style="box-shadow:none;border-radius:10px">
+          <table>
+            <thead><tr><th>假设</th><th>实验</th><th>指标</th><th>结果</th></tr></thead>
+            <tbody>
+              <tr><td>摄影师愿意为批量品牌字幕付费</td><td>落地页 + $29 预售</td><td>访问 → 预售转化</td><td><b>47 访问 / 2 预售（4.3%）</b></td></tr>
+              <tr><td>痛点是模板耗时，不是转写</td><td>6 个摄影师访谈</td><td>提及率</td><td><b>6/6 提到"逐词调整"</b></td></tr>
+              <tr><td>CapCut 免费版是主要替代</td><td>竞品使用调查</td><td>使用率</td><td><b>5/6 仍用 CapCut</b></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel compliance">
+        <div class="panel-head"><h2>获取与合规边界</h2><span class="badge ghost">只读采集 · 人工触达</span></div>
+        <p>本工具只读取公开内容，<b>不自动发帖、评论或私信</b>。AI 只生成触达草稿，发送动作由你本人在对应平台手动完成；线索来源链接会一直保留，方便核实与复盘。</p>
+      </div>
+    </section>
+
+    <!-- ---------- View: Schedules ---------- -->
+    <section class="view" id="view-schedules">
+      <div class="view-head">
+        <div>
+          <div class="eyebrow">Local Scheduler</div>
+          <h1>定时任务</h1>
+          <div class="muted">按频率自动采集与分析，结果保存在本机；每条结果保留来源链接。</div>
+        </div>
+        <div class="head-actions">
+          <button class="btn" id="runDueBtn">立即运行首个任务</button>
+          <button class="btn primary" id="newScheduleBtn">新建定时任务</button>
+        </div>
+      </div>
+
+      <div class="run-stats">
+        <div class="stat"><div class="label">启用中的任务</div><div class="value" id="schedEnabledCount">3</div></div>
+        <div class="stat"><div class="label">今日已运行</div><div class="value" id="schedTodayCount">2</div></div>
+        <div class="stat"><div class="label">今日采集</div><div class="value" id="schedOppCount" style="color:var(--green)">—</div></div>
+        <div class="stat"><div class="label">下次运行</div><div class="value" id="schedNextRun" style="font-size:18px;padding-top:5px">—</div></div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>任务</th><th>方向</th><th>来源</th><th>频率</th><th>下次运行</th><th>上次结果</th><th>启用</th><th></th></tr></thead>
+          <tbody id="scheduleTableBody">
+            <tr>
+              <td class="sched-task"><b>房产字幕 · 每日扫描</b><div class="sched-sub">AI: DeepSeek V3</div></td>
+              <td>房产经纪人视频字幕与剪辑痛点</td>
+              <td>Reddit · Web · HN</td>
+              <td>每天 09:00</td>
+              <td>明天 09:00</td>
+              <td>4 个机会 · 今天 09:00</td>
+              <td><label class="toggle"><input type="checkbox" checked><span></span></label></td>
+              <td><button class="btn ghost small" data-edit-schedule="房产字幕 · 每日扫描" data-edit-direction="房产经纪人视频字幕与剪辑痛点">编辑</button></td>
+            </tr>
+            <tr>
+              <td class="sched-task"><b>独立开发获客 · 每周一</b><div class="sched-sub">AI: Claude Sonnet</div></td>
+              <td>独立开发者获取前 100 个付费用户的困难</td>
+              <td>Reddit · GitHub · HN</td>
+              <td>每周一 09:00</td>
+              <td>11-09 09:00</td>
+              <td>3 个机会 · 11-02 09:00</td>
+              <td><label class="toggle"><input type="checkbox" checked><span></span></label></td>
+              <td><button class="btn ghost small" data-edit-schedule="独立开发获客 · 每周一" data-edit-direction="独立开发者获取前 100 个付费用户的困难">编辑</button></td>
+            </tr>
+            <tr>
+              <td class="sched-task"><b>跨境客服 · 每 6 小时</b><div class="sched-sub">AI: GPT-4o</div></td>
+              <td>跨境卖家在客服与售后环节的重复劳动</td>
+              <td>Web · V2EX · 小宇宙</td>
+              <td>每 6 小时</td>
+              <td>今天 18:00</td>
+              <td>2 个机会 · 今天 12:00</td>
+              <td><label class="toggle"><input type="checkbox" checked><span></span></label></td>
+              <td><button class="btn ghost small" data-edit-schedule="跨境客服 · 每 6 小时" data-edit-direction="跨境卖家在客服与售后环节的重复劳动">编辑</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel" style="margin-top:16px">
+        <div class="panel-head"><h2>调度说明</h2><span class="badge ghost">进程内</span></div>
+        <p class="hint" style="margin:0">调度由 FastAPI 进程内的 APScheduler 执行：API 运行时按 cron 触发，进程退出后不执行、不补跑。系统级后台常驻、开机自启和桌面通知尚未接入。</p>
+        <p class="hint" style="margin:8px 0 0">任务配置与运行记录保存在本机 SQLite；同一任务不会并发执行。配置了 AI 模型时，定时采集完成后会自动分析。</p>
+      </div>
+    </section>
+
+    <!-- ---------- View: History ---------- -->
+    <section class="view" id="view-history">
+      <div class="view-head">
+        <div>
+          <div class="eyebrow">Local History</div>
+          <h1>采集历史</h1>
+          <div class="muted">所有运行记录保存在本机 SQLite，不上传云端。</div>
+        </div>
+        <div class="head-actions"><button class="btn primary" data-view="new">新建采集</button></div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>时间</th><th>方向</th><th>来源</th><th>信号</th><th>AI</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody id="historyTableBody">
+            <tr><td>2026-11-06 13:42</td><td>房产视频字幕</td><td>Reddit · Web · HN</td><td>42</td><td>4</td><td><span class="state done"><span class="dot"></span>完成</span></td><td><a class="link" href="#" data-view="results">查看</a></td></tr>
+            <tr><td>2026-11-05 21:10</td><td>独立开发工具</td><td>Reddit</td><td>36</td><td>3</td><td><span class="state done"><span class="dot"></span>完成</span></td><td><a class="link" href="#" data-view="results">查看</a></td></tr>
+            <tr><td>2026-11-04 18:05</td><td>跨境卖家客服</td><td>Web · HN</td><td>28</td><td>2</td><td><span class="state done"><span class="dot"></span>完成</span></td><td><a class="link" href="#" data-view="results">查看</a></td></tr>
+            <tr><td>2026-11-03 10:22</td><td>本地生活 SaaS</td><td>Reddit · RSS</td><td>17</td><td>0</td><td><span class="state empty"><span class="dot"></span>无有效信号</span></td><td><a class="link" href="#" data-view="results">查看</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ---------- View: Library ---------- -->
+    <section class="view" id="view-library">
+      <div class="view-head">
+        <div>
+          <div class="eyebrow">Saved Opportunities</div>
+          <h1>机会库</h1>
+          <div class="muted">已收藏的机会会保留来源链接与 AI 分析，方便后续跟进验证。</div>
+        </div>
+        <div class="head-actions"><button class="btn" id="exportLibraryBtn">导出机会库</button></div>
+      </div>
+
+      <div class="opp-list">
+        <article class="opp-card">
+          <div class="score-ring" style="--score:81;--ring:#059669"><div class="inner">81</div></div>
+          <div class="opp-main">
+            <div class="opp-top">
+              <div><span class="badge high">高机会</span><h3>Amazon 宠物饮水机细分：低评论、高客单的差异化选品</h3></div>
+              <div class="opp-actions"><button class="btn ghost small" data-detail="crossborder-pet">查看详情</button></div>
+            </div>
+            <p class="opp-pain">选品要手工比对 20 个 listing 的价格、评论、BSR 与 A+ 内容；多产品追踪靠表格，运费、平台费和退货等隐藏成本容易误判。</p>
+            <div class="evidence">
+              <div class="evidence-label">核心证据</div>
+              <a class="source-link" href="https://www.reddit.com/r/AmazonProductIdeas/comments/1swoxlx/how_i_do_amazon_product_comparison_before/" target="_blank" rel="noopener">
+                <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1 1" stroke-linecap="round"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1-1" stroke-linecap="round"/></svg>
+                <span class="src-body"><span class="src-title">r/AmazonProductIdeas · Amazon product comparison framework <span class="ext">↗</span></span><span class="src-meta">20 个 listing 对比 · 2026</span><span class="quote">Pull data on positions 1-15 plus the 5 sponsored listings... Saves probably an hour per Amazon product comparison cycle.</span></span>
+              </a>
+            </div>
+          </div>
+        </article>
+
+        <article class="opp-card">
+          <div class="score-ring" style="--score:86;--ring:#059669"><div class="inner">86</div></div>
+          <div class="opp-main">
+            <div class="opp-top">
+              <div><span class="badge high">高机会</span><h3>面向房产摄影师/小代理的批量品牌化字幕模板</h3></div>
+              <div class="opp-actions"><button class="btn ghost small" data-detail="realtor-captions">查看详情</button></div>
+            </div>
+            <p class="opp-pain">通用自动字幕样式同质化，逐词动画制作耗时；摄影师按房源批量交付，需要统一的品牌模板与批量导出。</p>
+            <div class="evidence">
+              <div class="evidence-label">核心证据</div>
+              <a class="source-link" href="https://www.reddit.com/r/RealEstatePhotography/comments/1tmf5my/tiktokreel_realtor_captions/" target="_blank" rel="noopener">
+                <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1 1" stroke-linecap="round"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1-1" stroke-linecap="round"/></svg>
+                <span class="src-body"><span class="src-title">r/RealEstatePhotography · TikTok/Reel Realtor Captions <span class="ext">↗</span></span><span class="src-meta">9 赞 · 22 评论 · 2026-05-24</span><span class="quote">Is there a plug in / built in tool where these captions are templates? I'd like to use them myself but it's so time consuming doing word by word.</span></span>
+              </a>
+            </div>
+          </div>
+        </article>
+
+        <article class="opp-card">
+          <div class="score-ring" style="--score:74;--ring:#d97706"><div class="inner">74</div></div>
+          <div class="opp-main">
+            <div class="opp-top">
+              <div><span class="badge verify">待验证</span><h3>AI 工具目录 / Newsletter 的失效链接巡检</h3></div>
+              <div class="opp-actions"><button class="btn ghost small" data-detail="link-health">查看详情</button></div>
+            </div>
+            <p class="opp-pain">工具目录和 Newsletter 里的外链大量 404、域名更换，用户点开即失去信任；目前只能人工抽查。</p>
+            <div class="evidence">
+              <div class="evidence-label">核心证据</div>
+              <a class="source-link" href="https://www.reddit.com/r/indiebiz/comments/1hrp48i/i_built_a_webapp_where_you_can_find_tools_for/" target="_blank" rel="noopener">
+                <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1 1" stroke-linecap="round"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1-1" stroke-linecap="round"/></svg>
+                <span class="src-body"><span class="src-title">r/indiebiz · I built a webapp where you can find tools... <span class="ext">↗</span></span><span class="src-meta">2 赞 · 6 评论 · 2025-01-02</span><span class="quote">In the populated results, number of times url leads to 404, might be the website are down or changed the domain. You can filter the output what checks if website is live.</span></span>
+              </a>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ---------- View: Settings ---------- -->
+    <section class="view" id="view-settings">
+      <div class="view-head">
+        <div>
+          <div class="eyebrow">Settings</div>
+          <h1>设置</h1>
+          <div class="muted">AI 密钥只从后端环境变量读取；本页只展示状态，不收集或保存密钥。</div>
+        </div>
+      </div>
+
+      <div class="settings-grid">
+        <div>
+          <div class="panel">
+            <div class="panel-head">
+              <h2>AI 引擎</h2>
+              <span class="badge ghost" id="aiConfigBadge">未配置</span>
+            </div>
+            <p class="hint" style="margin:0 0 12px">后端从环境变量读取 <code>OPPORTUNITY_AI_MODEL</code> / <code>OPPORTUNITY_AI_API_KEY</code>；密钥不写入数据库。此页仅展示连接状态。</p>
+
+            <div class="provider default">
+              <div class="provider-head">
+                <span class="name">当前后端配置</span>
+                <span class="badge ghost" id="settingsAiState">未配置</span>
+              </div>
+              <div class="field"><label>Provider</label><input id="settingsAiProvider" readonly value="—"></div>
+              <div class="field"><label>Model</label><input id="settingsAiModel" readonly value="—"></div>
+              <div class="field"><label>Base URL</label><input id="settingsAiBaseUrl" readonly value="—"></div>
+              <div class="field"><label>API Key</label><input readonly value="由后端环境变量提供，不在此页面读取或保存"></div>
+            </div>
+
+            <p class="hint" style="margin:0 0 12px">切换模型请修改 API 进程的启动环境：<code>OPPORTUNITY_AI_MODEL</code>、<code>OPPORTUNITY_AI_BASE_URL</code>、<code>OPPORTUNITY_AI_API_KEY</code>。完整示例见 <code>server/README.md</code>。</p>
+
+            <div class="settings-actions">
+              <button class="btn" id="testAiBtn">检查配置</button>
+              <button class="btn primary" id="saveSettingsBtn">查看配置方法</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><h2>分析偏好</h2><span class="badge ghost">由 Domain Pack 决定</span></div>
+            <p class="hint" style="margin:0 0 12px">评分维度与权重由所选领域包的评分卡决定；以下选项为展示，当前版本不支持逐项修改。</p>
+            <div class="field">
+              <label class="field-label">输出语言</label>
+              <select><option selected>中文（保留英文原文引用）</option><option>English</option></select>
+            </div>
+            <div class="field" style="margin-top:12px">
+              <label class="field-label">评分侧重</label>
+              <div class="chips" style="margin:0">
+                <span class="chip">付费意愿</span>
+                <span class="chip">痛点频次</span>
+                <span class="chip">竞争强度</span>
+                <span class="chip">24h 可行性</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="panel">
+            <div class="panel-head"><h2>数据源</h2><span class="badge ghost">由后端注册表决定</span></div>
+            <p class="hint" style="margin:0 0 12px">当前可采集的数据源由后端 Provider Registry 决定；下列开关与搜索 Key 输入尚未接线，仅作原型展示。</p>
+
+            <div class="toggle-row">
+              <div><b>Reddit</b><div class="muted" style="font-size:11.5px">通过 Provider API 接入（agent-reach 适配器）</div></div>
+              <label class="toggle"><input type="checkbox" checked disabled><span></span></label>
+            </div>
+            <div class="field" style="margin-top:12px">
+              <label class="field-label">Provider 服务地址</label>
+              <input type="text" value="http://127.0.0.1:8765/api/v1" readonly style="background:#f9fafb;color:#6b7280">
+            </div>
+            <p class="hint" style="margin:6px 0 0">核心与 UI 只调用统一 API；命令行、登录与错误码由适配器内部处理，可随时替换或新增工具。</p>
+
+            <div class="field" style="margin-top:14px">
+              <label class="field-label">网页搜索服务</label>
+              <select disabled><option selected>Exa</option><option>Tavily</option><option>Serper</option></select>
+            </div>
+            <div class="field" style="margin-top:9px">
+              <label class="field-label">搜索 API Key</label>
+              <input type="password" placeholder="通过后端环境变量配置" disabled>
+            </div>
+
+            <div class="field" style="margin-top:14px">
+              <label class="field-label">RSS / 博客订阅源 <span class="optional">（每行一个）</span></label>
+              <textarea placeholder="https://example.com/feed.xml" style="min-height:70px" disabled></textarea>
+            </div>
+
+            <div class="toggle-row" style="margin-top:8px">
+              <div><b>Hacker News</b><div class="muted" style="font-size:11.5px">免登录公开接口</div></div>
+              <label class="toggle"><input type="checkbox" checked disabled><span></span></label>
+            </div>
+            <div class="toggle-row">
+              <div><b>Product Hunt</b><div class="muted" style="font-size:11.5px">需要 API Token</div></div>
+              <label class="toggle"><input type="checkbox" disabled><span></span></label>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><h2>存储与导出</h2></div>
+            <div class="field">
+              <label class="field-label">SQLite 数据库</label>
+              <input type="text" id="settingsDbPath" value="server/data/opportunity_scout.db" readonly style="font-size:12px;background:#f9fafb;color:#6b7280">
+            </div>
+            <p class="hint" style="margin:6px 0 0">可通过 <code>OPPORTUNITY_SCOUT_DB</code> 覆盖。导出文件由浏览器下载，不写入固定目录。</p>
+            <div class="settings-actions">
+              <button class="btn" id="openFolderBtn">复制数据库路径</button>
+              <button class="btn" id="quitAppBtn" style="display:none">退出本地服务</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><h2>获取与合规</h2></div>
+            <div class="toggle-row">
+              <div><b>自动私信 / 发帖</b><div class="muted" style="font-size:11.5px">已禁用：只读采集，避免平台风控</div></div>
+              <label class="toggle"><input type="checkbox" disabled><span></span></label>
+            </div>
+            <div class="toggle-row">
+              <div><b>触达前人工确认</b><div class="muted" style="font-size:11.5px">AI 只生成草稿，发送由你手动完成</div></div>
+              <label class="toggle"><input type="checkbox" checked disabled><span></span></label>
+            </div>
+            <p class="hint" style="margin:10px 0 0">线索仅用于合规的商务沟通；请遵守 Reddit 等平台的频率与反垃圾规则。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ============ Detail Modal ============ -->
+<div class="modal" id="modal">
+  <div class="modal-backdrop" data-close-modal></div>
+  <div class="dialog" role="dialog" aria-modal="true">
+    <div class="dialog-head">
+      <div>
+        <span class="badge" id="modalBadge">高机会</span>
+        <h2 id="modalTitle">机会标题</h2>
+      </div>
+      <button class="close-btn" data-close-modal aria-label="关闭">×</button>
+    </div>
+    <div id="modalBody"></div>
+    <div class="dialog-footer">
+      <button class="btn" data-close-modal>关闭</button>
+      <button class="btn" id="modalSaveBtn">加入机会库</button>
+      <button class="btn primary" id="modalAcquireBtn">启动获取闭环 →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Schedule Modal ============ -->
+<div class="modal" id="scheduleModal">
+  <div class="modal-backdrop" data-close-schedule></div>
+  <div class="dialog" role="dialog" aria-modal="true" style="max-width:720px">
+    <div class="dialog-head">
+      <div>
+        <span class="badge ghost">本地调度</span>
+        <h2 id="scheduleModalTitle">新建定时任务</h2>
+      </div>
+      <button class="close-btn" data-close-schedule aria-label="关闭">×</button>
+    </div>
+
+    <div class="field" style="margin-top:12px">
+      <label class="field-label" for="scheduleName">任务名称</label>
+      <input type="text" id="scheduleName" placeholder="例：房产字幕 · 每日扫描">
+    </div>
+    <div class="field" style="margin-top:10px">
+      <label class="field-label" for="scheduleDirection">方向描述</label>
+      <textarea id="scheduleDirection" style="min-height:64px" placeholder="输入要持续追踪的方向或问题"></textarea>
+    </div>
+    <div class="modal-grid" style="margin-top:10px">
+      <div class="field">
+        <label class="field-label" for="scheduleKeywords">关键词 <span class="optional">（可选）</span></label>
+        <input type="text" id="scheduleKeywords" placeholder="caption, realtor">
+      </div>
+      <div class="field">
+        <label class="field-label" for="scheduleAI">AI 引擎</label>
+        <select id="scheduleAI">
+          <option selected>DeepSeek V3（OpenAI 兼容）</option>
+          <option>GPT-4o</option>
+          <option>Claude Sonnet</option>
+          <option>Ollama · 本地模型</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-grid" style="margin-top:10px">
+      <div class="field">
+        <label class="field-label" for="scheduleFreq">频率</label>
+        <select id="scheduleFreq">
+          <option value="0 9 * * *">每天 09:00</option>
+          <option value="0 */6 * * *">每 6 小时</option>
+          <option value="0 9 * * 1">每周一 09:00</option>
+          <option value="custom">自定义 cron…</option>
+        </select>
+        <input type="text" id="scheduleCron" placeholder="5 段 cron，例如 0 9 * * *" style="margin-top:8px;display:none">
+      </div>
+      <div class="field">
+        <label class="field-label">结果处理</label>
+        <div class="hint" style="margin-top:8px">写入本机采集历史；配置 AI 后自动生成分析。当前版本不发送通知。</div>
+      </div>
+    </div>
+
+    <div class="field" style="margin-top:12px">
+      <label class="field-label">采集来源 <span class="optional">（Agent-Reach 渠道均可选）</span></label>
+      <div class="schedule-sources" id="scheduleSources"></div>
+    </div>
+
+    <div class="hint" style="margin-top:10px">领域包、条数与时间范围沿用「新建采集」页当前设置。任务保存在本机，API 运行时按计划触发；只读采集，不会自动发帖或私信。</div>
+    <div class="dialog-footer">
+      <button class="btn" data-close-schedule>取消</button>
+      <button class="btn primary" id="saveScheduleModalBtn">保存任务</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Outreach Draft Modal ============ -->
+<div class="modal" id="outreachModal">
+  <div class="modal-backdrop" data-close-outreach></div>
+  <div class="dialog" role="dialog" aria-modal="true" style="max-width:640px">
+    <div class="dialog-head">
+      <div>
+        <span class="badge ghost">AI 草稿</span>
+        <h2 id="outreachTitle">生成触达话术</h2>
+      </div>
+      <button class="close-btn" data-close-outreach aria-label="关闭">×</button>
+    </div>
+    <div class="field" style="margin:12px 0 10px">
+      <label class="field-label" for="outreachTone">语气</label>
+      <select id="outreachTone">
+        <option selected>简短、直接（推荐）</option>
+        <option>专业、正式</option>
+        <option>轻松、同行交流</option>
+      </select>
+    </div>
+    <textarea id="outreachText" style="min-height:190px"></textarea>
+    <div class="hint" style="margin-top:9px">草稿由 AI 生成；发送请由你本人在对应平台手动完成。本工具不会自动私信或发帖。</div>
+    <div class="dialog-footer">
+      <button class="btn" data-close-outreach>关闭</button>
+      <button class="btn primary" id="copyOutreachBtn">复制话术</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  /* ================= Mock data ================= */
+  const OPPS = {
+    'realtor-captions': {
+      score: 86,
+      tone: 'high',
+      tag: '高机会',
+      filter: 'high',
+      title: '面向房产摄影师/小代理的批量品牌化字幕模板',
+      pain: '通用自动字幕样式同质化，逐词动画制作耗时；房产摄影师按房源批量交付，需要统一的品牌字体、颜色、位置和批量导出。',
+      target: '房产摄影师、小型房产营销代理、剪辑外包团队',
+      pay: '中高：经纪人月软件支出可达 $224，其中视频营销工具约 $99/月；可按 $29–49/月定价。',
+      risk: 'CapCut 仍提供免费自动字幕；需验证“批量 + 品牌一致性”是否足够痛，而非又一个通用字幕工具。',
+      verdict: '建议先访谈 10 个房产摄影师/小代理，确认每月交付量与当前字幕制作耗时，再投入开发。',
+      tags: ['B2B', '视频工具', '待访谈'],
+      sources: [
+        {
+          title: 'r/RealEstatePhotography · TikTok/Reel Realtor Captions',
+          url: 'https://www.reddit.com/r/RealEstatePhotography/comments/1tmf5my/tiktokreel_realtor_captions/',
+          meta: '9 赞 · 22 评论 · 2026-05-24',
+          quote: 'Is there a plug in / built in tool where these captions are templates? I’d like to use them myself but it’s so time consuming doing word by word.'
+        },
+        {
+          title: 'r/RealEstatePhotography · Video Edit Captions',
+          url: 'https://www.reddit.com/r/RealEstatePhotography/comments/1shb1oh/video_edit_captions/',
+          meta: '2026-04-10',
+          quote: 'Automation caption software... the cons here is they are too generic, every 2nd person uses it, or go for manual caption word by word.'
+        },
+        {
+          title: 'r/AIContentAutomators · Running a real estate marketing agency in Texas',
+          url: 'https://www.reddit.com/r/AIContentAutomators/comments/1pq7k2x/running_a_real_estate_marketing_agency_in_texas/',
+          meta: '房地产营销代理 · 2025-12-19',
+          quote: 'We’re getting more clients than we can manually edit for... auto-generate captions + simple cuts/transitions.'
+        },
+        {
+          title: 'r/RealEstateTechnology · My $224/mo software stack after 3 years as an agent',
+          url: 'https://www.reddit.com/r/RealEstateTechnology/comments/1mtqj03/my_224mo_software_stack_after_3_years_as_an_agent/',
+          meta: '2025-08-18',
+          quote: 'Marketing Automation: PropPromote ($99/month) — automates my listing marketing (video tours, virtual staging, social posts).'
+        }
+      ]
+    },
+    'link-health': {
+      score: 74,
+      tone: 'verify',
+      tag: '待验证',
+      filter: 'verify',
+      title: 'AI 工具目录 / Newsletter 的失效链接巡检',
+      pain: '工具目录和 Newsletter 里的外链大量 404、域名更换，用户点开即失去信任；目前只能人工抽查，缺少定时复检。',
+      target: 'AI 工具导航站、Newsletter 主、SEO 代理商',
+      pay: '中高：$19–49/月；按目录规模或监测 URL 数量分级。',
+      risk: '通用链接检查器多且免费；差异化必须是定时复检、定价页变化监控和可嵌入的“已验证”徽章。',
+      verdict: '先找 5 个 AI 工具目录/Newsletter 主，问他们多久检查一次外链、404 造成过什么损失。',
+      tags: ['B2B', 'SEO', '低竞争'],
+      sources: [
+        {
+          title: 'r/indiebiz · I built a webapp where you can find tools for your every project',
+          url: 'https://www.reddit.com/r/indiebiz/comments/1hrp48i/i_built_a_webapp_where_you_can_find_tools_for/',
+          meta: '2 赞 · 6 评论 · 2025-01-02',
+          quote: 'In the populated results, number of times url leads to 404, might be the website are down or changed the domain. You can filter the output what checks if website is live.'
+        }
+      ]
+    },
+    'subtitle-timing': {
+      score: 68,
+      tone: 'verify',
+      tag: '待验证',
+      filter: 'verify',
+      title: '网页版 SRT 字幕时间轴修正工具',
+      pain: '自动生成的字幕时间轴经常错位，逐条拖动、拆分、合并很耗时；桌面工具功能强但难用，在线工具大多只能改文字。',
+      target: '短视频创作者、剪辑师、外包剪辑团队',
+      pay: '中：$9/月或按次导出；创作者已有字幕付费习惯。',
+      risk: 'Subtitle Edit 等桌面免费软件成熟；需验证“免安装 + 波形图 + 拖拽对齐”是否足以形成差异。',
+      verdict: '用一条 60 秒演示视频做落地页，测“上传 SRT → 拖时间轴 → 导出”的点击转化。',
+      tags: ['C 端', '视频工具', '非 AI'],
+      sources: [
+        {
+          title: 'r/indiehackers · Tell me 1 tool you need',
+          url: 'https://www.reddit.com/r/indiehackers/comments/1g8qqqi/tell_me_1_tool_you_need_and_ill_go_looking_for/',
+          meta: '11 赞 · 36 评论 · 2024-10-21',
+          quote: 'Auto captions for short form videos. Used to be free in CapCut now it’s $10/month. Only interested in a free option.'
+        },
+        {
+          title: 'r/RealEstatePhotography · TikTok/Reel Realtor Captions',
+          url: 'https://www.reddit.com/r/RealEstatePhotography/comments/1tmf5my/tiktokreel_realtor_captions/',
+          meta: '9 赞 · 22 评论 · 2026-05-24',
+          quote: 'It is word by word and changing blending modes. They take a long time.'
+        }
+      ]
+    },
+    'tool-directory': {
+      score: 45,
+      tone: 'red',
+      tag: '红海',
+      filter: 'red',
+      title: '又一个 AI 工具导航 / 搜索站',
+      pain: '用户对“输入需求找 AI 工具”已有明确疲劳；同类站点每周都在出现，差异化只能靠数据质量和流量。',
+      target: '泛用户、AI 工具尝鲜者',
+      pay: '低：用户端几乎不付费，主要靠联盟链接；获客成本高。',
+      risk: '赛道饱和、被公开嘲讽、无技术壁垒；不建议作为 24 小时 MVP 方向。',
+      verdict: '放弃。除非能拿到独家数据或强渠道，否则不要进入。',
+      tags: ['红海', '导航站', '不建议'],
+      sources: [
+        {
+          title: 'r/InternetIsBeautiful · There’s An AI For That',
+          url: 'https://www.reddit.com/r/InternetIsBeautiful/comments/11e314l/theres_an_ai_for_that_find_ai_tools_using_ai/',
+          meta: '209 赞 · 13 评论 · 2023-02-28',
+          quote: 'Yay, the 5th website this week doing this. I’ll definitely remember its name, just like I remember the other 4.'
+        },
+        {
+          title: 'r/InternetIsBeautiful · Find alternatives to any app',
+          url: 'https://www.reddit.com/r/InternetIsBeautiful/comments/2k2gbv/type_in_any_appsoftware_and_find_alternatives_you/',
+          meta: '599 赞 · 19 评论 · 2014-10-23',
+          quote: 'This is an interesting idea... but it’s not without problems.'
+        }
+      ]
+    },
+    'crossborder-pet': {
+      score: 81,
+      tone: 'high',
+      tag: '高机会',
+      filter: 'high',
+      title: 'Amazon 宠物饮水机细分：低评论、高客单的差异化选品',
+      pain: '选品要手工拉前 15 名 + 5 个广告位共 20 个 listing，逐项对比价格、评论、BSR、A+ 内容；多产品追踪靠表格，运费、平台费和退货等隐藏成本容易算错。',
+      target: '1–3 人 Amazon FBA / TikTok Shop 卖家，月 GMV $10k–100k',
+      pay: '高：跨境卖家已为选品与数据工具付费；一次错判库存的损失远高于工具月费。',
+      risk: '需核实细分市场是否已被品牌垄断，以及 CE/FCC、专利与商标风险；平台数据优先用官方 API 或公开页，遵守平台条款。',
+      verdict: '先用小单样品 + $100 广告测试验证需求与毛利，再决定是否备货；同时向 3 家工厂询价并核对审计报告。',
+      tags: ['跨境', '选品', '供应链'],
+      sources: [
+        {
+          title: 'r/AmazonFBA · My Personal Amazon Product Research SOP',
+          url: 'https://www.reddit.com/r/AmazonFBA/comments/1mpt4u0/heres_my_personal_amazon_product_research_sop_free/',
+          meta: '选品标准 · 2025',
+          quote: 'Low competition means a niche where there aren’t multiple pages filled with direct competitors... products have less than 100 reviews.'
+        },
+        {
+          title: 'r/AmazonProductIdeas · Product comparison framework',
+          url: 'https://www.reddit.com/r/AmazonProductIdeas/comments/1swoxlx/how_i_do_amazon_product_comparison_before/',
+          meta: '20 个 listing 对比 · 2026',
+          quote: 'Pull data on positions 1-15 plus the 5 sponsored listings... Saves probably an hour per Amazon product comparison cycle.'
+        },
+        {
+          title: 'r/AmazonFBA · How Do You Track Products and Performance?',
+          url: 'https://www.reddit.com/r/AmazonFBA/comments/1rqu48u/how_do_you_track_products_and_performance_when/',
+          meta: '多产品追踪 · 2026',
+          quote: 'Many beginners rely on simple methods like spreadsheets, notes apps, or even bookmarking Amazon listings, but things can get confusing.'
+        },
+        {
+          title: 'r/ClothingStartups · Stop being scammed by Alibaba “manufacturers”',
+          url: 'https://www.reddit.com/r/ClothingStartups/comments/1shl55u/stop_being_scammed_by_alibaba_manufacturers_i/',
+          meta: '供应链验真 · 2026',
+          quote: 'A lot of suppliers on Alibaba aren’t actual manufacturers, they’re middlemen... Prices include heavy 300/400% markups.'
+        }
+      ]
+    }
+  };
+
+  /* ================= Live API state ================= */
+  const API_BASE = window.OPPORTUNITY_API_BASE
+    || localStorage.getItem('opportunity_api_base')
+    || 'http://127.0.0.1:8765/api/v1';
+  const STATE = {
+    apiOnline: false,
+    providers: [],
+    packs: [],
+    ai: null,
+    appInfo: null,
+    currentRun: null,
+    currentAnalysis: null,
+    activeOpps: null,
+    schedules: []
+  };
+  let editingScheduleId = null;
+  let scheduleDraftMeta = null;
+
+  async function api(path, options = {}, timeout = 120000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(API_BASE + path, {
+        ...options,
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+      });
+      const text = await response.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+      if (!response.ok) {
+        const detail = data && data.detail ? data.detail : (typeof data === 'string' && data ? data : response.statusText);
+        throw new Error(detail || ('HTTP ' + response.status));
+      }
+      return data;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function sourceApiId(source) {
+    return source.apiId || ('agent-reach.' + source.id);
+  }
+
+  function providerName(providerId) {
+    const found = STATE.providers.find(p => p.id === providerId);
+    return found ? found.name : providerId;
+  }
+
+  function applyProviders() {
+    const byId = new Map(STATE.providers.map(p => [p.id, p]));
+    const known = new Set();
+    SOURCES.forEach(source => {
+      source.apiId = sourceApiId(source);
+      const provider = byId.get(source.apiId);
+      source.providerStatus = provider ? provider.status : 'missing';
+      // Only providers the backend can actually query are selectable.
+      source.connected = !!provider && ['ready', 'degraded'].includes(provider.status);
+      source.providerNote = provider ? provider.note || '' : '';
+      if (source.defaultChecked === undefined) source.defaultChecked = source.checked === true;
+      source.checked = source.connected && source.defaultChecked;
+      known.add(source.apiId);
+    });
+    STATE.providers.forEach(provider => {
+      if (!known.has(provider.id)) {
+        SOURCES.push({
+          id: provider.id,
+          apiId: provider.id,
+          name: provider.name,
+          meta: provider.group + ' · 已接入',
+          tone: provider.status === 'ready' ? 'ok' : 'warn',
+          group: 'other',
+          defaultChecked: false,
+          connected: ['ready', 'degraded'].includes(provider.status),
+          providerStatus: provider.status,
+          providerNote: provider.note || ''
+        });
+      }
+    });
+    renderMainSources();
+  }
+
+  function applyPacks() {
+    const select = document.getElementById('domainPack');
+    if (!select || !STATE.packs.length) return;
+    const current = select.value;
+    select.innerHTML = STATE.packs.map(pack => {
+      const label = pack.id === 'general' ? '自动识别 / 通用' : pack.name;
+      return `<option value="${escapeHTML(pack.id)}">${escapeHTML(label)}</option>`;
+    }).join('');
+    if (Array.from(select.options).some(opt => opt.value === current)) select.value = current;
+  }
+
+  function applyAiStatus() {
+    const ai = STATE.ai;
+    const label = ai && ai.configured
+      ? `${ai.model} · ${ai.provider}`
+      : '未配置（仅采集证据）';
+    ['aiEngine', 'scheduleAI'].forEach(id => {
+      const select = document.getElementById(id);
+      if (!select) return;
+      select.innerHTML = `<option value="">${escapeHTML(label)}</option>`;
+    });
+    const badge = document.getElementById('aiConfigBadge');
+    if (badge) {
+      badge.textContent = ai && ai.configured ? '已配置' : '未配置';
+      badge.className = 'badge ' + (ai && ai.configured ? 'high' : 'ghost');
+    }
+    const state = document.getElementById('settingsAiState');
+    if (state) {
+      state.textContent = ai && ai.configured ? '已配置' : '未配置';
+      state.className = 'badge ' + (ai && ai.configured ? 'high' : 'ghost');
+    }
+    const fields = {
+      settingsAiProvider: ai && ai.provider,
+      settingsAiModel: ai && ai.model,
+      settingsAiBaseUrl: ai && ai.base_url
+    };
+    Object.entries(fields).forEach(([id, value]) => {
+      const input = document.getElementById(id);
+      if (input) input.value = value || '—';
+    });
+  }
+
+  function applyAppInfo() {
+    const info = STATE.appInfo || {};
+    const pathInput = document.getElementById('settingsDbPath');
+    if (pathInput && info.db_path) pathInput.value = info.db_path;
+    const quit = document.getElementById('quitAppBtn');
+    if (quit) quit.style.display = info.desktop ? '' : 'none';
+  }
+
+  async function quitApp() {
+    if (!window.OPPORTUNITY_DESKTOP_TOKEN) {
+      toast('当前是通过开发服务器打开的，请按启动方式停止进程');
+      return;
+    }
+    const button = document.getElementById('quitAppBtn');
+    if (button) {
+      button.disabled = true;
+      button.textContent = '正在退出…';
+    }
+    try {
+      await api('/app/shutdown', {
+        method: 'POST',
+        headers: { 'X-Opportunity-Token': window.OPPORTUNITY_DESKTOP_TOKEN }
+      }, 5000);
+      setApiStatus(false, '本地服务已退出');
+      toast('本地服务已退出，可以关闭此页面');
+    } catch (err) {
+      toast('退出失败：' + err.message);
+      if (button) {
+        button.disabled = false;
+        button.textContent = '退出本地服务';
+      }
+    }
+  }
+
+  function setApiStatus(online, detail) {
+    const chip = document.getElementById('apiStatusChip');
+    const note = document.getElementById('dataModeNote');
+    if (!chip) return;
+    if (online) {
+      const ai = STATE.ai;
+      const aiText = ai && ai.configured ? `AI：${escapeHTML(ai.model)}` : 'AI：未配置';
+      chip.innerHTML = `<span class="dot" style="background:#34d399"></span>API：已连接 · <b>${aiText}</b>`;
+      if (note) note.textContent = 'live data';
+    } else {
+      chip.innerHTML = '<span class="dot" style="background:#f59e0b"></span>API：未连接';
+      if (note) note.textContent = detail || 'mock data · 启动 server 后自动接入';
+    }
+  }
+
+  document.getElementById('apiStatusChip').addEventListener('click', () => {
+    if (!STATE.apiOnline) {
+      toast('正在重试连接 API…');
+      loadBackend();
+    }
+  });
+
+  async function loadBackend() {
+    try {
+      const [providers, packs, ai, appInfo] = await Promise.all([
+        api('/providers', {}, 5000),
+        api('/domain-packs', {}, 5000),
+        api('/ai/status', {}, 5000),
+        api('/app/info', {}, 5000)
+      ]);
+      STATE.apiOnline = true;
+      STATE.providers = providers.providers || [];
+      STATE.packs = packs.domain_packs || [];
+      STATE.ai = ai;
+      STATE.appInfo = appInfo;
+      applyProviders();
+      applyPacks();
+      applyAiStatus();
+      applyAppInfo();
+      setApiStatus(true);
+      loadRuns();
+      loadSchedules();
+    } catch (err) {
+      STATE.apiOnline = false;
+      setApiStatus(false, 'mock data · API 未启动');
+    }
+  }
+
+  /* ================= Source catalog ================= */
+  const SOURCES = [
+    { id: 'reddit', name: 'Reddit', meta: 'optional · 已连接', tone: 'ok', group: 'reach', checked: true },
+    { id: 'github', name: 'GitHub', meta: 'default · 免登录', tone: 'ok', group: 'reach' },
+    { id: 'youtube', name: 'YouTube', meta: 'default · 免登录', tone: 'ok', group: 'reach' },
+    { id: 'twitter', name: 'Twitter / X', meta: 'experimental · 需登录', tone: 'warn', group: 'reach' },
+    { id: 'facebook', name: 'Facebook', meta: 'experimental · 需登录', tone: 'warn', group: 'reach' },
+    { id: 'instagram', name: 'Instagram', meta: 'experimental · 需登录', tone: 'warn', group: 'reach' },
+    { id: 'bilibili', name: 'Bilibili', meta: 'default · 需登录', tone: 'warn', group: 'reach' },
+    { id: 'xiaohongshu', name: '小红书', meta: 'optional · 需登录', tone: 'warn', group: 'reach' },
+    { id: 'linkedin', name: 'LinkedIn', meta: 'optional · 需登录', tone: 'warn', group: 'reach' },
+    { id: 'boss', name: 'Boss 直聘', meta: 'optional · 需登录', tone: 'warn', group: 'reach' },
+    { id: 'v2ex', name: 'V2EX', meta: 'default · 免登录', tone: 'ok', group: 'reach' },
+    { id: 'xueqiu', name: '雪球', meta: 'optional · 需登录', tone: 'warn', group: 'reach' },
+    { id: 'xiaoyuzhou', name: '小宇宙', meta: 'optional · 免登录', tone: 'ok', group: 'reach' },
+    { id: 'web', name: 'Web（公开网页）', meta: 'default · 免登录', tone: 'ok', group: 'reach', checked: true },
+    { id: 'exa', name: '网页搜索（Exa / Tavily）', meta: '需配置 Key', tone: 'warn', group: 'other' },
+    { id: 'hn', name: 'Hacker News', apiId: 'hackernews', meta: 'Algolia 公开 API · 免登录', tone: 'ok', group: 'other' },
+    { id: 'amazon', name: 'Amazon 商品', apiId: 'amazon.creators', meta: '官方 Creators API · 需 Key', tone: 'warn', group: 'other' },
+    { id: 'trends', name: 'Google Trends', apiId: 'google.trends', meta: '选品趋势 · 免登录（可能限流）', tone: 'ok', group: 'other' },
+    { id: 'alibaba', name: '1688 / Alibaba', meta: '供应链 · 需官方 Open Platform', tone: 'warn', group: 'other' },
+    { id: 'keepa', name: 'Keepa', meta: '需 API Key', tone: 'warn', group: 'other' },
+    { id: 'rss', name: 'RSS / 博客', apiId: 'rss', meta: '订阅源 · 需配置', tone: '', group: 'other' },
+    { id: 'ph', name: 'Product Hunt', meta: '需 API Token', tone: '', group: 'other' }
+  ];
+
+  function escapeHTML(value) {
+    return String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  }
+
+  function mainSourceLabel(s) {
+    const unavailable = STATE.apiOnline && !s.connected;
+    let meta = s.meta;
+    if (s.connected && s.providerNote && s.providerNote.length <= 30) {
+      meta = s.providerNote;
+    }
+    let title = '';
+    if (unavailable) {
+      if (s.providerStatus === 'not_configured') {
+        meta = s.providerNote || '未配置';
+        title = meta;
+      } else if (s.providerStatus === 'disabled') {
+        meta = s.providerNote || '已停用';
+        title = meta;
+      } else {
+        meta = '未接入 Provider API';
+        title = '后端没有注册这个来源';
+      }
+    }
+    const tone = unavailable ? 'off' : s.tone;
+    return `<label class="source-opt${unavailable ? ' is-off' : ''}" title="${escapeHTML(title)}">
+      <input type="checkbox" data-source="${escapeHTML(s.id)}" ${s.checked && !unavailable ? 'checked' : ''} ${unavailable ? 'disabled' : ''}>
+      <span><span class="name">${escapeHTML(s.name)}</span><span class="meta ${tone}">${escapeHTML(meta)}</span></span>
+    </label>`;
+  }
+
+  function selectedSourceIds() {
+    return Array.from(document.querySelectorAll('#agentReachSources input:checked, #otherSources input:checked'))
+      .map(input => input.dataset.source)
+      .map(id => {
+        const source = SOURCES.find(item => item.id === id);
+        return source ? sourceApiId(source) : id;
+      });
+  }
+
+  function updateSourceCount() {
+    const el = document.getElementById('sourceCount');
+    if (el) el.textContent = '已选 ' + selectedSourceIds().length + ' 个';
+  }
+
+  function renderMainSources() {
+    const reach = SOURCES.filter(s => s.group === 'reach');
+    const other = SOURCES.filter(s => s.group === 'other');
+    document.getElementById('agentReachSources').innerHTML = reach.map(mainSourceLabel).join('');
+    document.getElementById('otherSources').innerHTML = other.map(mainSourceLabel).join('');
+    updateSourceCount();
+  }
+
+  function renderScheduleSources() {
+    const checked = new Set(selectedSourceIds());
+    const visible = STATE.apiOnline ? SOURCES.filter(s => s.connected) : SOURCES;
+    document.getElementById('scheduleSources').innerHTML = visible.map(s => {
+      const apiId = sourceApiId(s);
+      return `<label><input type="checkbox" data-sched-source="${escapeHTML(apiId)}" ${checked.has(apiId) ? 'checked' : ''}>${escapeHTML(s.name)}</label>`;
+    }).join('');
+  }
+
+  const scheduleModal = document.getElementById('scheduleModal');
+
+  function openScheduleModal(opts = {}) {
+    editingScheduleId = opts.id || null;
+    const mainLimit = parseInt(document.getElementById('limit').value, 10) || 20;
+    const mainRange = parseInt(document.getElementById('range').value, 10) || null;
+    scheduleDraftMeta = {
+      domain_pack: opts.domain_pack || document.getElementById('domainPack').value || 'general',
+      limit_per_provider: opts.limit_per_provider || mainLimit,
+      time_range_days: opts.time_range_days !== undefined && opts.time_range_days !== null
+        ? opts.time_range_days
+        : mainRange
+    };
+    document.getElementById('scheduleModalTitle').textContent = editingScheduleId ? '编辑定时任务' : '新建定时任务';
+    document.getElementById('scheduleName').value = opts.name || '';
+    document.getElementById('scheduleDirection').value = opts.direction || direction.value || '';
+    document.getElementById('scheduleKeywords').value = (opts.keywords || []).join(', ') || document.getElementById('keywords').value || '';
+    const freq = document.getElementById('scheduleFreq');
+    const cronInput = document.getElementById('scheduleCron');
+    const presets = Array.from(freq.options).map(opt => opt.value);
+    if (opts.cron && presets.includes(opts.cron)) {
+      freq.value = opts.cron;
+      cronInput.style.display = 'none';
+      cronInput.value = '';
+    } else if (opts.cron) {
+      freq.value = 'custom';
+      cronInput.style.display = 'block';
+      cronInput.value = opts.cron;
+    } else {
+      freq.value = '0 9 * * *';
+      cronInput.style.display = 'none';
+      cronInput.value = '';
+    }
+    renderScheduleSources();
+    if (opts.provider_ids) {
+      document.querySelectorAll('#scheduleSources input').forEach(input => {
+        input.checked = opts.provider_ids.includes(input.dataset.schedSource);
+      });
+    }
+    scheduleModal.classList.add('show');
+  }
+
+  function closeScheduleModal() {
+    scheduleModal.classList.remove('show');
+    editingScheduleId = null;
+    scheduleDraftMeta = null;
+  }
+
+  async function saveSchedule() {
+    const name = document.getElementById('scheduleName').value.trim();
+    const desc = document.getElementById('scheduleDirection').value.trim();
+    if (!name || !desc) {
+      toast('请填写任务名称和方向描述');
+      return;
+    }
+    const freq = document.getElementById('scheduleFreq');
+    const cron = freq.value === 'custom'
+      ? document.getElementById('scheduleCron').value.trim()
+      : freq.value;
+    if (!cron) {
+      toast('请填写 cron 表达式');
+      return;
+    }
+    const providerIds = Array.from(document.querySelectorAll('#scheduleSources input:checked'))
+      .map(input => input.dataset.schedSource);
+    if (!providerIds.length) {
+      toast('请选择至少一个已接入来源');
+      return;
+    }
+    if (!STATE.apiOnline) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="sched-task"><b>${escapeHTML(name)}</b><div class="sched-sub">本地演示</div></td>
+        <td>${escapeHTML(desc)}</td>
+        <td>${escapeHTML(providerIds.join(' · '))}</td>
+        <td>${escapeHTML(cron)}</td>
+        <td>待计算</td><td>—</td>
+        <td><label class="toggle"><input type="checkbox" checked><span></span></label></td>
+        <td><button class="btn ghost small" data-edit-schedule="${escapeHTML(name)}" data-edit-direction="${escapeHTML(desc)}">编辑</button></td>`;
+      document.getElementById('scheduleTableBody').prepend(tr);
+      closeScheduleModal();
+      toast('已加入本地演示列表（API 未连接）');
+      return;
+    }
+    const payload = {
+      name,
+      direction: desc,
+      keywords: document.getElementById('scheduleKeywords').value.split(',').map(s => s.trim()).filter(Boolean),
+      provider_ids: providerIds,
+      domain_pack: (scheduleDraftMeta && scheduleDraftMeta.domain_pack) || document.getElementById('domainPack').value || 'general',
+      limit_per_provider: (scheduleDraftMeta && scheduleDraftMeta.limit_per_provider) || parseInt(document.getElementById('limit').value, 10) || 20,
+      time_range_days: scheduleDraftMeta ? scheduleDraftMeta.time_range_days : (parseInt(document.getElementById('range').value, 10) || null),
+      cron
+    };
+    const wasEditing = Boolean(editingScheduleId);
+    try {
+      if (wasEditing) {
+        await api(`/schedules/${editingScheduleId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      } else {
+        await api('/schedules', { method: 'POST', body: JSON.stringify(payload) });
+      }
+      closeScheduleModal();
+      await loadSchedules();
+      toast(wasEditing ? '定时任务已更新' : '定时任务已保存：' + name);
+    } catch (err) {
+      toast('保存失败：' + err.message);
+    }
+  }
+
+  /* ================= Leads & outreach drafts ================= */
+  const LEADS = {
+    'lead-a': {
+      name: '房产摄影师 A',
+      draft: 'Hi — I saw your post in r/RealEstatePhotography about caption templates for listing videos. I’m building a tool that applies branded caption presets to listing videos in batches, so you don’t have to do it word by word. Would you be open to a 10-minute call this week? I can show you the prototype and you can tell me if it’s actually useful. — [Your name]'
+    },
+    'lead-b': {
+      name: '房产营销代理 B',
+      draft: 'Hi — I saw your post about keeping up with short-form video for your real estate clients. I’m building a batch caption tool for listing videos with reusable brand presets. If you’re still manually editing captions, would a 15-minute call be useful? Happy to share what we’re building and get your feedback. — [Your name]'
+    },
+    'lead-c': {
+      name: '摄影工作室 C',
+      draft: 'Hi — I came across your comment about using CapCut + Canva for property videos. I’m building a tool that keeps caption styling consistent across listings and exports in batches. Would you be open to a quick feedback call? No pitch — I’m trying to understand whether this would actually save you time. — [Your name]'
+    }
+  };
+
+  /* ================= Rendering ================= */
+  const oppList = document.getElementById('oppList');
+
+  function scoreColor(score) {
+    if (score >= 80) return '#059669';
+    if (score >= 60) return '#d97706';
+    return '#dc2626';
+  }
+
+  function sourceHTML(s) {
+    return `
+      <a class="source-link" href="${escapeHTML(s.url)}" target="_blank" rel="noopener">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1 1" stroke-linecap="round"/>
+          <path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1-1" stroke-linecap="round"/>
+        </svg>
+        <span class="src-body">
+          <span class="src-title">${escapeHTML(s.title)} <span class="ext">↗</span></span>
+          <span class="src-meta">${escapeHTML(s.meta)}</span>
+          <span class="quote">${escapeHTML(s.quote)}</span>
+        </span>
+      </a>`;
+  }
+
+  function oppHTML(id) {
+    const o = OPPS[id];
+    const color = scoreColor(o.score);
+    const firstSources = o.sources.slice(0, 2).map(sourceHTML).join('');
+    return `
+      <article class="opp-card" data-filter="${o.filter}">
+        <div class="score-ring" style="--score:${o.score};--ring:${color}"><div class="inner">${o.score}</div></div>
+        <div class="opp-main">
+          <div class="opp-top">
+            <div>
+              <span class="badge ${o.tone}">${escapeHTML(o.tag)}</span>
+              <h3>${escapeHTML(o.title)}</h3>
+            </div>
+            <div class="opp-actions">
+              <button class="btn ghost small" data-save="${id}" title="加入机会库">☆ 收藏</button>
+              <button class="btn small" data-acquire="${id}">启动获取</button>
+              <button class="btn ghost small" data-detail="${id}">查看详情</button>
+            </div>
+          </div>
+          <p class="opp-pain">${escapeHTML(o.pain)}</p>
+          <div class="opp-meta">
+            <div class="meta-item"><b>目标用户：</b>${escapeHTML(o.target)}</div>
+            <div class="meta-item"><b>付费信号：</b>${escapeHTML(o.pay)}</div>
+          </div>
+          <div class="evidence">
+            <div class="evidence-label">核心证据 · 点击跳转原帖</div>
+            ${firstSources}
+          </div>
+          <div class="tag-row">
+            ${o.tags.map(t => `<span class="tag">${escapeHTML(t)}</span>`).join('')}
+            <span class="tag risk">风险：${escapeHTML(o.risk.split('；')[0])}</span>
+          </div>
+        </div>
+      </article>`;
+  }
+
+  function renderOpportunities() {
+    const ids = (STATE.activeOpps || Object.keys(OPPS)).filter(id => OPPS[id]);
+    oppList.innerHTML = ids.map(oppHTML).join('');
+  }
+
+  /* ================= Navigation ================= */
+  const VIEW_NAMES = { new: '新建采集', results: '机会分析', pipeline: '获取闭环', schedules: '定时任务', history: '采集历史', library: '机会库', settings: '设置' };
+
+  function showView(name) {
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    const target = document.getElementById('view-' + name);
+    if (target) target.classList.add('active');
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+    document.getElementById('crumbCurrent').textContent = VIEW_NAMES[name] || name;
+    if (name === 'history') loadRuns();
+    if (name === 'schedules') loadSchedules();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function bindViewTriggers() {
+    document.querySelectorAll('[data-view]').forEach(el => {
+      el.addEventListener('click', e => {
+        e.preventDefault();
+        showView(el.dataset.view);
+      });
+    });
+  }
+
+  /* ================= Form ================= */
+  const direction = document.getElementById('direction');
+
+  document.querySelectorAll('#exampleChips .chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      direction.value = chip.dataset.fill;
+      direction.focus();
+    });
+  });
+
+  /* ================= Progress simulation ================= */
+  const startBtn = document.getElementById('startBtn');
+  const progressPanel = document.getElementById('progressPanel');
+  const progressPct = document.getElementById('progressPct');
+  const progressFill = document.getElementById('progressFill');
+  const steps = Array.from(document.querySelectorAll('#steps .step'));
+  const stepMeta = ['已解析', '采集完成', '采集完成', '23 条相关', '4 个机会', '已生成'];
+  let running = false;
+
+  function resetProgress() {
+    steps.forEach((step, i) => {
+      step.classList.remove('running', 'done');
+      step.querySelector('.step-dot').textContent = String(i + 1);
+      step.querySelector('.step-meta').textContent = '等待中';
+    });
+    progressFill.style.width = '0%';
+    progressPct.textContent = '0%';
+  }
+
+  function runProgress(done) {
+    resetProgress();
+    let i = 0;
+    const total = steps.length;
+    const tick = () => {
+      if (i > 0) {
+        steps[i - 1].classList.remove('running');
+        steps[i - 1].classList.add('done');
+        steps[i - 1].querySelector('.step-dot').textContent = '✓';
+        steps[i - 1].querySelector('.step-meta').textContent = stepMeta[i - 1];
+      }
+      if (i >= total) {
+        progressFill.style.width = '100%';
+        progressPct.textContent = '100%';
+        setTimeout(done, 420);
+        return;
+      }
+      steps[i].classList.add('running');
+      steps[i].querySelector('.step-meta').textContent = '进行中…';
+      const pct = Math.round((i / total) * 100);
+      progressFill.style.width = pct + '%';
+      progressPct.textContent = pct + '%';
+      i++;
+      setTimeout(tick, 520 + Math.random() * 230);
+    };
+    tick();
+  }
+
+  function setStep(index, state, meta) {
+    const step = steps[index];
+    if (!step) return;
+    step.classList.remove('running', 'done');
+    if (state === 'running') step.classList.add('running');
+    if (state === 'done') step.classList.add('done');
+    step.querySelector('.step-dot').textContent = state === 'done' ? '✓' : String(index + 1);
+    step.querySelector('.step-meta').textContent = meta || '等待中';
+    const completed = state === 'done' ? index + 1 : index;
+    const pct = Math.round((completed / steps.length) * 100);
+    progressFill.style.width = pct + '%';
+    progressPct.textContent = pct + '%';
+  }
+
+  function signalToSource(signal) {
+    return {
+      title: signal.title || signal.source_url,
+      url: signal.source_url,
+      meta: [signal.provider_id, signal.author_public, (signal.published_at || '').slice(0, 10)]
+        .filter(Boolean).join(' · '),
+      quote: signal.quote || ''
+    };
+  }
+
+  function analysisToOpp(run, analysis) {
+    const tone = analysis.verdict === 'build' ? 'high' : analysis.verdict === 'verify' ? 'verify' : 'red';
+    const tag = analysis.verdict === 'build' ? '建议投入' : analysis.verdict === 'verify' ? '待验证' : '放弃';
+    const filter = tone;
+    return {
+      score: analysis.score,
+      tone,
+      tag,
+      filter,
+      title: analysis.one_liner || run.direction,
+      pain: analysis.thesis,
+      target: analysis.target_customer,
+      pay: analysis.willingness_to_pay,
+      risk: (analysis.risks || []).join('；') || '未识别',
+      verdict: (analysis.next_actions || []).map(a => '• ' + (a.action || a)).join('\n') || '无',
+      tags: (analysis.dimension_scores || []).slice(0, 3).map(d => `${d.name} ${d.score}/10`),
+      sources: (analysis.citations || []).map(c => {
+        const signal = (run.signals || []).find(s => s.id === c.signal_id);
+        if (signal) return signalToSource(signal);
+        return { title: c.source_url, url: c.source_url, meta: 'AI 引用', quote: c.quote || '' };
+      })
+    };
+  }
+
+  function renderEvidence(run) {
+    if (!run.signals || !run.signals.length) {
+      return `<article class="opp-card"><div class="opp-main"><div class="opp-top"><div><span class="badge verify">无信号</span><h3>${escapeHTML(run.direction)}</h3></div></div><p class="opp-pain">本次没有采集到信号。请检查数据源状态、查询词或平台限流；本工具不会换账号反复请求。</p></div></article>`;
+    }
+    return `<article class="opp-card"><div class="opp-main">
+      <div class="opp-top"><div><span class="badge verify">仅证据</span><h3>${escapeHTML(run.direction)}</h3></div></div>
+      <p class="opp-pain">${STATE.ai && STATE.ai.configured ? 'AI 分析失败，以下是原始公开信号。' : '未配置 AI 引擎。以下是本次采集到的公开信号，请人工核对后再判断。'}</p>
+      <div class="evidence"><div class="evidence-label">公开信号 · ${run.signals.length} 条 · 点击跳转原文</div>
+      ${run.signals.map(signalToSource).map(sourceHTML).join('')}</div>
+    </div></article>`;
+  }
+
+  function renderLiveRun(run, analysis) {
+    STATE.currentRun = run;
+    STATE.currentAnalysis = analysis || null;
+    const view = document.getElementById('view-results');
+    view.querySelector('.eyebrow').textContent = 'Run ' + run.id;
+    view.querySelector('h1').textContent = run.direction + ' · 分析';
+    view.querySelector('.view-head .muted').textContent =
+      `${run.signals.length} 条信号 · 来源 ${run.provider_ids.join(' / ')} · 状态 ${run.status}`;
+    const stats = view.querySelectorAll('.run-stats .stat');
+    const values = [run.signals.length, run.signals.length, analysis ? 1 : 0, analysis && analysis.verdict === 'build' ? 1 : 0];
+    const labels = ['原始信号', '去重后信号', 'AI 判断', '建议投入'];
+    stats.forEach((stat, i) => {
+      stat.querySelector('.label').textContent = labels[i];
+      stat.querySelector('.value').textContent = values[i];
+    });
+    const tabs = document.getElementById('filterTabs');
+    tabs.innerHTML = analysis
+      ? '<button class="tab active" data-filter="all">全部 1</button>'
+      : `<button class="tab active" data-filter="all">公开信号 ${run.signals.length}</button>`;
+    if (analysis) {
+      const key = 'live-' + run.id;
+      OPPS[key] = analysisToOpp(run, analysis);
+      STATE.activeOpps = [key];
+      renderOpportunities();
+    } else {
+      STATE.activeOpps = null;
+      oppList.innerHTML = renderEvidence(run);
+    }
+  }
+
+  async function loadRun(runId) {
+    try {
+      const run = await api(`/runs/${runId}`, {}, 15000);
+      let analysis = null;
+      if (run.has_analysis) {
+        try {
+          analysis = await api(`/runs/${runId}/analysis`, {}, 15000);
+        } catch (err) {
+          analysis = null;
+        }
+      }
+      renderLiveRun(run, analysis);
+      showView('results');
+    } catch (err) {
+      toast('加载 Run 失败：' + err.message);
+    }
+  }
+
+  async function runLive() {
+    const providerIds = selectedSourceIds();
+    if (!providerIds.length) {
+      toast('请选择至少一个已接入数据源');
+      return;
+    }
+    resetProgress();
+    setStep(0, 'running', '解析中…');
+    setStep(0, 'done', '已解析');
+    setStep(1, 'running', '采集中…');
+    let run = null;
+    try {
+      run = await api('/runs', {
+        method: 'POST',
+        body: JSON.stringify({
+          domain_pack: document.getElementById('domainPack').value || 'general',
+          direction: direction.value.trim(),
+          keywords: document.getElementById('keywords').value.split(',').map(s => s.trim()).filter(Boolean),
+          provider_ids: providerIds,
+          limit_per_provider: parseInt(document.getElementById('limit').value, 10) || 20,
+          time_range_days: parseInt(document.getElementById('range').value, 10) || null
+        })
+      }, 240000);
+    } catch (err) {
+      setStep(1, 'done', '失败');
+      toast('采集失败：' + err.message);
+      return;
+    }
+    setStep(1, 'done', `${run.signals.length} 条`);
+    setStep(2, 'done', run.provider_ids.join(' / '));
+    setStep(3, 'done', '已去重');
+    let analysis = null;
+    if (STATE.ai && STATE.ai.configured) {
+      setStep(4, 'running', 'AI 分析中…');
+      try {
+        analysis = await api(`/runs/${run.id}/analyze`, { method: 'POST', body: '{}' }, 300000);
+        setStep(4, 'done', `${analysis.verdict} · ${analysis.score}`);
+      } catch (err) {
+        setStep(4, 'done', '分析失败');
+        toast('采集完成，但 AI 分析失败：' + err.message);
+      }
+    } else {
+      setStep(4, 'done', '未配置 AI');
+    }
+    setStep(5, 'done', '已生成');
+    progressFill.style.width = '100%';
+    progressPct.textContent = '100%';
+    renderLiveRun(run, analysis);
+    showView('results');
+    toast(analysis ? '分析完成：' + analysis.one_liner : `采集完成：${run.signals.length} 条公开信号`);
+    loadRuns();
+  }
+
+  startBtn.addEventListener('click', async () => {
+    if (running) return;
+    if (!direction.value.trim()) {
+      toast('请先输入一个方向或关键词');
+      direction.focus();
+      return;
+    }
+    running = true;
+    startBtn.disabled = true;
+    progressPanel.classList.add('show');
+    progressPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    try {
+      if (STATE.apiOnline) {
+        await runLive();
+      } else {
+        await new Promise(resolve => runProgress(resolve));
+        toast('演示完成（API 未连接，未写入本机数据）');
+        showView('results');
+      }
+    } finally {
+      running = false;
+      startBtn.disabled = false;
+    }
+  });
+
+  /* ================= History & schedules from API ================= */
+  function formatDateTime(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+
+  function stateBadge(status) {
+    if (status === 'completed') return { cls: 'done', label: '完成' };
+    if (status === 'partial') return { cls: 'empty', label: '部分完成' };
+    if (status === 'failed') return { cls: 'empty', label: '失败' };
+    return { cls: 'empty', label: '运行中' };
+  }
+
+  function cronLabel(cron) {
+    return ({
+      '0 9 * * *': '每天 09:00',
+      '0 */6 * * *': '每 6 小时',
+      '0 9 * * 1': '每周一 09:00'
+    })[cron] || cron;
+  }
+
+  function renderRecentRuns(runs) {
+    const grid = document.getElementById('recentGrid');
+    if (!grid || !STATE.apiOnline) return;
+    if (!runs.length) {
+      grid.innerHTML = '<div class="recent-card" style="cursor:default"><div class="time">暂无记录</div><div class="title">发起一次采集</div><div class="meta">结果会自动出现在这里，并保存在本机 SQLite。</div></div>';
+      return;
+    }
+    grid.innerHTML = runs.slice(0, 3).map(run => {
+      const count = run.stats && run.stats.signal_count != null ? run.stats.signal_count : '—';
+      const providerText = (run.provider_ids || []).map(providerName).join(' · ');
+      return `<button class="recent-card" data-recent-run="${escapeHTML(run.id)}">
+        <div class="time">${escapeHTML(formatDateTime(run.created_at))}</div>
+        <div class="title">${escapeHTML(run.direction)}</div>
+        <div class="meta"><span class="mini-badge">${run.has_analysis ? '已分析' : '仅证据'}</span><span>${escapeHTML(String(count))} 条信号 · ${escapeHTML(providerText)}</span></div>
+      </button>`;
+    }).join('');
+  }
+
+  async function loadRuns() {
+    if (!STATE.apiOnline) return;
+    try {
+      const data = await api('/runs?limit=20', {}, 8000);
+      const runs = data.runs || [];
+      STATE.runs = runs;
+      renderRecentRuns(runs);
+      const today = new Date().toDateString();
+      const todaysRuns = runs.filter(run => new Date(run.created_at).toDateString() === today);
+      const todayEl = document.getElementById('schedOppCount');
+      if (todayEl) todayEl.textContent = todaysRuns.length;
+      const tbody = document.getElementById('historyTableBody');
+      if (!tbody) return;
+      if (!runs.length) {
+        tbody.innerHTML = '<tr><td colspan="7">暂无采集记录。发起一次采集后会自动出现在这里。</td></tr>';
+        return;
+      }
+      tbody.innerHTML = runs.map(run => {
+        const count = run.stats && run.stats.signal_count != null ? run.stats.signal_count : '—';
+        const providerText = (run.provider_ids || []).map(providerName).join(' · ');
+        const state = stateBadge(run.status);
+        return `<tr>
+          <td>${escapeHTML(formatDateTime(run.created_at))}</td>
+          <td>${escapeHTML(run.direction)}</td>
+          <td>${escapeHTML(providerText)}</td>
+          <td>${escapeHTML(String(count))}</td>
+          <td>${run.has_analysis ? '<span class="state done"><span class="dot"></span>已分析</span>' : '—'}</td>
+          <td><span class="state ${state.cls}"><span class="dot"></span>${state.label}</span></td>
+          <td><a class="link" href="#" data-run-id="${escapeHTML(run.id)}">查看</a></td>
+        </tr>`;
+      }).join('');
+    } catch (err) {
+      console.warn('loadRuns failed', err);
+    }
+  }
+
+  function renderSchedules() {
+    const tbody = document.getElementById('scheduleTableBody');
+    if (!tbody) return;
+    const schedules = STATE.schedules;
+    if (!schedules.length) {
+      tbody.innerHTML = '<tr><td colspan="8">暂无定时任务。点击右上角“新建定时任务”创建。</td></tr>';
+    } else {
+      const aiLabel = STATE.ai && STATE.ai.configured ? STATE.ai.model : '未配置';
+      tbody.innerHTML = schedules.map(schedule => {
+        const providers = (schedule.provider_ids || []).map(providerName).join(' · ');
+        const last = schedule.last_error
+          ? `<span style="color:#dc2626">失败：${escapeHTML(schedule.last_error.slice(0, 40))}</span>`
+          : schedule.last_run_at
+            ? `已运行 · ${escapeHTML(formatDateTime(schedule.last_run_at))}`
+            : '—';
+        return `<tr>
+          <td class="sched-task"><b>${escapeHTML(schedule.name || schedule.direction)}</b><div class="sched-sub">AI: ${escapeHTML(aiLabel)}</div></td>
+          <td>${escapeHTML(schedule.direction)}</td>
+          <td>${escapeHTML(providers)}</td>
+          <td>${escapeHTML(cronLabel(schedule.cron))}</td>
+          <td>${escapeHTML(formatDateTime(schedule.next_run_at))}</td>
+          <td>${last}</td>
+          <td><label class="toggle"><input type="checkbox" data-sched-toggle="${escapeHTML(schedule.id)}" ${schedule.enabled ? 'checked' : ''}><span></span></label></td>
+          <td>
+            <button class="btn ghost small" data-sched-edit="${escapeHTML(schedule.id)}">编辑</button>
+            <button class="btn ghost small" data-sched-run="${escapeHTML(schedule.id)}">运行</button>
+            <button class="btn ghost small" data-sched-delete="${escapeHTML(schedule.id)}">删除</button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+    const enabled = schedules.filter(item => item.enabled);
+    const today = new Date().toDateString();
+    const ranToday = schedules.filter(item => item.last_run_at && new Date(item.last_run_at).toDateString() === today);
+    const next = enabled
+      .map(item => item.next_run_at)
+      .filter(Boolean)
+      .sort()[0];
+    document.getElementById('schedEnabledCount').textContent = enabled.length;
+    document.getElementById('schedTodayCount').textContent = ranToday.length;
+    document.getElementById('schedNextRun').textContent = next ? formatDateTime(next) : '—';
+  }
+
+  async function loadSchedules() {
+    if (!STATE.apiOnline) return;
+    try {
+      const data = await api('/schedules', {}, 8000);
+      STATE.schedules = data.schedules || [];
+      renderSchedules();
+    } catch (err) {
+      console.warn('loadSchedules failed', err);
+    }
+  }
+
+  async function runScheduleNow(scheduleId) {
+    const schedule = STATE.schedules.find(item => item.id === scheduleId);
+    toast('正在运行：' + (schedule ? (schedule.name || schedule.direction) : scheduleId));
+    try {
+      const run = await api(`/schedules/${scheduleId}/run`, { method: 'POST' }, 240000);
+      toast(`运行完成：${run.signals.length} 条信号`);
+      await loadSchedules();
+      await loadRuns();
+      await loadRun(run.id);
+    } catch (err) {
+      toast('运行失败：' + err.message);
+      await loadSchedules();
+    }
+  }
+
+  async function deleteSchedule(scheduleId) {
+    if (!confirm('确定删除这个定时任务？')) return;
+    try {
+      await api(`/schedules/${scheduleId}`, { method: 'DELETE' }, 8000);
+      toast('定时任务已删除');
+      await loadSchedules();
+    } catch (err) {
+      toast('删除失败：' + err.message);
+    }
+  }
+
+  /* ================= Filters ================= */
+  document.getElementById('filterTabs').addEventListener('click', e => {
+    const tab = e.target.closest('.tab');
+    if (!tab) return;
+    document.querySelectorAll('#filterTabs .tab').forEach(t => t.classList.toggle('active', t === tab));
+    const filter = tab.dataset.filter;
+    document.querySelectorAll('#oppList .opp-card').forEach(card => {
+      card.style.display = (filter === 'all' || card.dataset.filter === filter) ? '' : 'none';
+    });
+  });
+
+  /* ================= Modal ================= */
+  const modal = document.getElementById('modal');
+
+  function openDetail(id) {
+    const o = OPPS[id];
+    if (!o) return;
+    document.getElementById('modalBadge').className = 'badge ' + o.tone;
+    document.getElementById('modalBadge').textContent = o.tag;
+    document.getElementById('modalTitle').textContent = o.title;
+    document.getElementById('modalBody').innerHTML = `
+      <div class="detail-block">
+        <div class="label">核心痛点</div>
+        <p>${escapeHTML(o.pain)}</p>
+      </div>
+      <div class="detail-block">
+        <div class="label">目标用户</div>
+        <p>${escapeHTML(o.target)}</p>
+      </div>
+      <div class="detail-block">
+        <div class="label">付费信号</div>
+        <p>${escapeHTML(o.pay)}</p>
+      </div>
+      <div class="detail-block">
+        <div class="label">风险与反证</div>
+        <p>${escapeHTML(o.risk)}</p>
+      </div>
+      <div class="detail-block">
+        <div class="label">AI 结论</div>
+        <p>${escapeHTML(o.verdict).replace(/\n/g, '<br>')}</p>
+      </div>
+      <div class="detail-block">
+        <div class="label">全部来源链接</div>
+        ${o.sources.map(sourceHTML).join('')}
+      </div>`;
+    modal.classList.add('show');
+    document.getElementById('modalSaveBtn').dataset.save = id;
+  }
+
+  function closeModal() {
+    modal.classList.remove('show');
+  }
+
+  document.addEventListener('click', e => {
+    const detail = e.target.closest('[data-detail]');
+    if (detail) {
+      openDetail(detail.dataset.detail);
+      return;
+    }
+    const acquire = e.target.closest('[data-acquire]');
+    if (acquire) {
+      const o = OPPS[acquire.dataset.acquire];
+      closeModal();
+      showView('pipeline');
+      toast('已启动获取流程：' + (o ? o.title : '机会'));
+      return;
+    }
+    const lead = e.target.closest('[data-lead]');
+    if (lead) {
+      openOutreach(lead.dataset.lead);
+      return;
+    }
+    const recentRun = e.target.closest('[data-recent-run]');
+    if (recentRun) {
+      loadRun(recentRun.dataset.recentRun);
+      return;
+    }
+    const runLink = e.target.closest('[data-run-id]');
+    if (runLink) {
+      e.preventDefault();
+      loadRun(runLink.dataset.runId);
+      return;
+    }
+    const editSched = e.target.closest('[data-sched-edit]');
+    if (editSched) {
+      const schedule = STATE.schedules.find(item => item.id === editSched.dataset.schedEdit);
+      if (schedule) openScheduleModal({ ...schedule, edit: true });
+      return;
+    }
+    const runSched = e.target.closest('[data-sched-run]');
+    if (runSched) {
+      runScheduleNow(runSched.dataset.schedRun);
+      return;
+    }
+    const delSched = e.target.closest('[data-sched-delete]');
+    if (delSched) {
+      deleteSchedule(delSched.dataset.schedDelete);
+      return;
+    }
+    const editSchedule = e.target.closest('[data-edit-schedule]');
+    if (editSchedule) {
+      openScheduleModal({
+        edit: true,
+        name: editSchedule.dataset.editSchedule,
+        direction: editSchedule.dataset.editDirection
+      });
+      return;
+    }
+    if (e.target.closest('[data-close-schedule]')) {
+      closeScheduleModal();
+      return;
+    }
+    if (e.target.closest('[data-close-modal]')) {
+      closeModal();
+      return;
+    }
+    if (e.target.closest('[data-close-outreach]')) {
+      closeOutreach();
+      return;
+    }
+    const save = e.target.closest('[data-save]');
+    if (save) {
+      toast('已加入机会库（原型演示）');
+    }
+  });
+
+  document.getElementById('modalSaveBtn').addEventListener('click', () => {
+    toast('已加入机会库（原型演示）');
+    closeModal();
+  });
+
+  document.getElementById('modalAcquireBtn').addEventListener('click', () => {
+    closeModal();
+    showView('pipeline');
+    toast('已创建获取项目：进入验证 → 线索 → 触达 → 成交');
+  });
+
+  /* ================= Outreach draft ================= */
+  const outreachModal = document.getElementById('outreachModal');
+
+  function openOutreach(id) {
+    const lead = LEADS[id];
+    if (!lead) return;
+    document.getElementById('outreachTitle').textContent = '触达话术 · ' + lead.name;
+    document.getElementById('outreachText').value = lead.draft;
+    outreachModal.classList.add('show');
+  }
+
+  function closeOutreach() {
+    outreachModal.classList.remove('show');
+  }
+
+  document.getElementById('copyOutreachBtn').addEventListener('click', async () => {
+    const textarea = document.getElementById('outreachText');
+    try {
+      await navigator.clipboard.writeText(textarea.value);
+      toast('已复制，请到对应平台手动发送');
+    } catch (err) {
+      textarea.select();
+      document.execCommand('copy');
+      toast('已复制，请到对应平台手动发送');
+    }
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeModal();
+  });
+
+  /* ================= Export ================= */
+  function download(filename, text, type = 'application/json;charset=utf-8') {
+    const blob = new Blob([text], { type });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+  }
+
+  document.getElementById('exportBtn').addEventListener('click', () => {
+    if (STATE.currentRun) {
+      const name = `run-${STATE.currentRun.id}.json`;
+      download(name, JSON.stringify({
+        run: STATE.currentRun,
+        analysis: STATE.currentAnalysis
+      }, null, 2));
+      toast('已导出 ' + name);
+      return;
+    }
+    download('opportunities-2026-11-06.json', JSON.stringify(OPPS, null, 2));
+    toast('已导出 opportunities-2026-11-06.json');
+  });
+
+  document.getElementById('exportLibraryBtn').addEventListener('click', () => {
+    const saved = {
+      'crossborder-pet': OPPS['crossborder-pet'],
+      'realtor-captions': OPPS['realtor-captions'],
+      'link-health': OPPS['link-health']
+    };
+    download('opportunity-library.json', JSON.stringify(saved, null, 2));
+    toast('已导出机会库');
+  });
+
+  document.getElementById('exportLeadsBtn').addEventListener('click', () => {
+    const rows = [
+      ['线索', '平台', '痛点', '来源链接', '状态'],
+      ['房产摄影师 A', 'r/RealEstatePhotography', '求字幕模板，逐词太耗时', 'https://www.reddit.com/r/RealEstatePhotography/comments/1tmf5my/tiktokreel_realtor_captions/', '已触达'],
+      ['房产营销代理 B', 'r/AIContentAutomators', '客户多到剪不过来，想自动化字幕与剪辑', 'https://www.reddit.com/r/AIContentAutomators/comments/1pq7k2x/running_a_real_estate_marketing_agency_in_texas/', '已回复'],
+      ['摄影工作室 C', 'r/RealEstatePhotography', '用 CapCut + Canva，关注品牌一致性', 'https://www.reddit.com/r/RealEstatePhotography/comments/1rqya57/what_ai_video_tools_are_you_using_for_real_estate/', '已付费']
+    ];
+    const csv = rows.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
+    download('leads-2026-11-06.csv', '﻿' + csv, 'text/csv;charset=utf-8');
+    toast('已导出线索 CSV');
+  });
+
+  /* ================= Settings ================= */
+  document.querySelectorAll('.provider input[type=radio]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      document.querySelectorAll('.provider').forEach(p => p.classList.remove('default'));
+      radio.closest('.provider').classList.add('default');
+    });
+  });
+
+  document.getElementById('testAiBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('testAiBtn');
+    btn.disabled = true;
+    btn.textContent = '测试中…';
+    try {
+      const ai = await api('/ai/status', {}, 8000);
+      STATE.ai = ai;
+      applyAiStatus();
+      setApiStatus(true);
+      toast(ai.configured ? `AI 已配置：${ai.model}（仅检查后端配置）` : 'API 已连接，但未配置 AI 模型');
+    } catch (err) {
+      setApiStatus(false, 'mock data · API 未启动');
+      toast('连接失败：' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '测试连接';
+    }
+  });
+
+  document.getElementById('saveSettingsBtn').addEventListener('click', () => {
+    toast('请在启动 API 前设置 OPPORTUNITY_AI_* 环境变量，见 server/README.md');
+  });
+
+  document.getElementById('openFolderBtn').addEventListener('click', async () => {
+    const path = (STATE.appInfo && STATE.appInfo.db_path) || 'server/data/opportunity_scout.db';
+    try {
+      await navigator.clipboard.writeText(path);
+      toast('已复制：' + path);
+    } catch (err) {
+      toast('数据库路径：' + path);
+    }
+  });
+
+  document.getElementById('quitAppBtn').addEventListener('click', quitApp);
+
+  /* ================= Sources & schedules ================= */
+  document.getElementById('toggleAllSources').addEventListener('click', () => {
+    const boxes = Array.from(document.querySelectorAll('#agentReachSources input[type=checkbox], #otherSources input[type=checkbox]'))
+      .filter(box => !box.disabled);
+    const allChecked = boxes.length > 0 && boxes.every(box => box.checked);
+    boxes.forEach(box => { box.checked = !allChecked; });
+    updateSourceCount();
+  });
+
+  document.addEventListener('change', e => {
+    if (e.target.matches('[data-source]')) updateSourceCount();
+    if (e.target.matches('[data-sched-toggle]')) {
+      const scheduleId = e.target.dataset.schedToggle;
+      const enabled = e.target.checked;
+      api(`/schedules/${scheduleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled })
+      }).then(() => {
+        toast(enabled ? '任务已启用' : '任务已暂停');
+        loadSchedules();
+      }).catch(err => {
+        toast('更新失败：' + err.message);
+        loadSchedules();
+      });
+    }
+    if (e.target.id === 'scheduleFreq') {
+      const custom = e.target.value === 'custom';
+      document.getElementById('scheduleCron').style.display = custom ? 'block' : 'none';
+      if (custom) document.getElementById('scheduleCron').focus();
+    }
+  });
+
+  document.getElementById('newScheduleBtn').addEventListener('click', () => openScheduleModal());
+  document.getElementById('saveScheduleBtn').addEventListener('click', () => openScheduleModal());
+  document.getElementById('saveScheduleModalBtn').addEventListener('click', saveSchedule);
+  document.getElementById('runDueBtn').addEventListener('click', async () => {
+    if (!STATE.apiOnline) {
+      toast('API 未连接，无法触发任务');
+      return;
+    }
+    const target = STATE.schedules.find(item => item.enabled);
+    if (!target) {
+      toast('没有启用中的定时任务');
+      return;
+    }
+    await runScheduleNow(target.id);
+  });
+
+  /* ================= Toast ================= */
+  let toastTimer;
+  function toast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 2400);
+  }
+
+  /* ================= Init ================= */
+  renderMainSources();
+  renderOpportunities();
+  bindViewTriggers();
+  loadBackend();
+</script>
+</body>
+</html>

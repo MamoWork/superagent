@@ -1,0 +1,85 @@
+/* Application additions. The prototype styles above keep their original class
+   names; these rules only bridge routing, state views, and the new data-driven
+   parts of the UI. */
+
+.view{display:block}
+
+.nav-item{text-decoration:none}
+a.btn,.recent-card{text-decoration:none}
+.recent-card{display:block;color:inherit}
+.status-chip{font:inherit;cursor:pointer}
+
+.offline-banner{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  margin:14px auto 0;max-width:1180px;
+  background:var(--amber-soft);border:1px solid #fde68a;border-radius:10px;
+  padding:9px 13px;font-size:12.5px;color:#92400e;
+}
+
+.spinner{
+  display:inline-block;width:18px;height:18px;border-radius:50%;
+  border:2px solid #e5e7eb;border-top-color:var(--accent);
+  animation:spin .8s linear infinite;margin-right:8px;vertical-align:-4px;
+}
+.empty-state > span:not(.spinner){display:block;margin-top:3px}
+.empty-action{margin-top:14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.error-state{border-color:#fecaca;background:var(--red-soft)}
+.error-state b{color:#991b1b}
+.form-error{color:var(--red);font-size:12px;margin:10px 0 0;line-height:1.55}
+.text-error{color:var(--red)}
+.row-actions{display:flex;gap:4px;flex-wrap:wrap}
+.confirm-text{margin:14px 0 2px;font-size:13.5px;line-height:1.65;color:#374151}
+
+.progress-bar.indeterminate span{
+  width:34% !important;transition:none;
+  animation:progress-slide 1.35s ease-in-out infinite;
+}
+.progress-bar.failed span{width:100% !important;background:var(--red)}
+@keyframes progress-slide{
+  0%{margin-left:-34%}
+  100%{margin-left:100%}
+}
+
+.opp-footer{
+  display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+  margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;
+}
+.opp-footer .hint{margin-left:auto}
+
+.provider-errors{margin-bottom:16px}
+.provider-error{padding:9px 0;border-bottom:1px solid #f0f1f4}
+.provider-error:last-child{border-bottom:0;padding-bottom:0}
+.provider-error-head{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12.5px}
+.provider-error-head code{background:#f3f4f6;border-radius:5px;padding:1px 6px;font-size:10.5px;color:#4b5563}
+.provider-error p{margin:4px 0 0;font-size:12px;color:#4b5563;line-height:1.55}
+
+.detail-list{margin:0;padding-left:18px;font-size:13px;color:#374151;line-height:1.65}
+.dimension-list{display:flex;flex-direction:column;gap:12px;margin-top:4px}
+.dimension-row{border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.dimension-head{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12.5px}
+.dimension-head span{font-size:10.8px;color:var(--muted-2)}
+.dimension-row p{margin:4px 0 0;font-size:11.8px;color:var(--muted);line-height:1.55}
+
+.pipeline-board{grid-template-columns:repeat(6,minmax(190px,1fr))}
+.pipe-stage{display:flex;align-items:center;gap:6px;margin:7px 0}
+.pipe-stage label{font-size:10.5px;color:var(--muted-2)}
+.pipe-stage select{padding:4px 7px;font-size:10.8px;border-radius:7px}
+.pipe-actions{display:flex;gap:3px;flex-wrap:wrap;margin-top:7px}
+.pipe-actions .btn{padding:5px 7px;font-size:10.8px}
+.pipe-empty{font-size:11px;color:var(--muted-2);text-align:center;padding:14px 0;margin:0}
+
+.provider-fields{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:11.5px;margin-bottom:6px}
+.provider-fields div{min-width:0}
+.provider-fields span:first-child{display:block;color:var(--muted-2);font-size:10.5px}
+.provider-fields code{font-size:10.8px;word-break:break-all}
+.compliance-pill{
+  display:inline-flex;align-items:center;border-radius:999px;padding:2px 9px;
+  font-size:10.5px;font-weight:700;background:#f3f4f6;color:var(--muted);
+}
+.compliance-pill.on{background:var(--green-soft);color:var(--green)}
+
+@media (max-width:860px){
+  .offline-banner{align-items:flex-start;flex-direction:column}
+  .opp-footer .hint{margin-left:0}
+  .provider-fields{grid-template-columns:1fr}
+}

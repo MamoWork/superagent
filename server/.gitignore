@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+data/*.db
+data/*.db-*
+briefs/run_*.json
+briefs/run_*.md
+build/
+dist/
+packaging/*.icns
+packaging/*.iconset/
