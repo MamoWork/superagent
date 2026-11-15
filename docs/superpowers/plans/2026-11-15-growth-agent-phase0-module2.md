@@ -1737,7 +1737,7 @@ git commit -m "feat: add growth internal API auth and task endpoints"
 
 **Files:**
 - Create: `server/growth_core/adapters/__init__.py`
-- Create: `server/growth_core/adapters/base.py` (minimal: `AdapterHealth` only)
+- Create: `server/growth_core/adapters/base.py` (`AdapterHealth` plus the adapter exception hierarchy)
 - Create: `server/growth_core/adapters/feishu.py`
 - Create: `server/growth_core/services/feishu_signature.py`
 - Modify: `server/tests/growth/fakes.py` (add `FakeNotifier`)
@@ -1747,7 +1747,7 @@ git commit -m "feat: add growth internal API auth and task endpoints"
 - Produces `FeishuNotifier(*, app_id: str, app_secret: str, base_url: str = "https://open.feishu.cn", client: httpx.AsyncClient | None = None)` with:
   - `async def send_card(self, chat_id: str, card: dict[str, Any]) -> str` (returns Feishu `message_id`)
   - `async def health(self) -> AdapterHealth`
-- Produces `AdapterHealth(name: str, status: str, detail: str = "")` in `growth_core/adapters/base.py`.
+- Produces `AdapterHealth(name: str, status: str, detail: str = "")` plus `AdapterError`, `ProviderNotConfigured`, `ProviderAuthError`, `ProviderRateLimited`, `ProviderTimeout`, `ProviderUnavailable`, and `ProviderBadOutput` in `growth_core/adapters/base.py` (Task 10 reuses these, it does not redefine them).
 - Produces:
   - `def verify_feishu_signature(headers: Mapping[str, str], body: bytes, encrypt_key: str) -> bool`
   - `def verify_feishu_token(payload: dict[str, Any], expected_token: str) -> bool`
@@ -1877,7 +1877,7 @@ git commit -m "feat: add feishu notifier and callback verification"
 
 **Interfaces:**
 - Produces:
-  - `AdapterError`, `ProviderNotConfigured`, `ProviderAuthError`, `ProviderRateLimited`, `ProviderTimeout`, `ProviderUnavailable`, `ProviderBadOutput`
+  - `AdapterError`, `ProviderNotConfigured`, `ProviderAuthError`, `ProviderRateLimited`, `ProviderTimeout`, `ProviderUnavailable`, `ProviderBadOutput` (created in Task 9; import and reuse, do not redefine)
   - `AdapterHealth(name: str, status: str, detail: str = "")` (already created in Task 9; extend the file, do not redefine it)
   - `RawPost` dataclass
   - `SourceAdapter` protocol: `name`, `capabilities: dict[str, Any]`, `async fetch(source: GrowthSource) -> list[RawPost]`, `async health() -> AdapterHealth`, `def validate_config(self) -> None`
