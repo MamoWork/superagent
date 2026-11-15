@@ -159,7 +159,6 @@ server/docs/growth-runbook.md
 - Create: `server/growth_core/__init__.py`
 - Create: `server/growth_core/config.py`
 - Create: `server/growth_social/__init__.py`
-- Create: `server/tests/__init__.py`
 - Create: `server/tests/growth/__init__.py`
 - Create: `server/tests/growth/conftest.py`
 - Modify: `server/requirements.txt`
@@ -175,8 +174,8 @@ server/docs/growth-runbook.md
 ```python
 @dataclass(frozen=True)
 class GrowthSettings:
-    database_url: str
-    service_token: str
+    database_url: str = field(repr=False)
+    service_token: str = field(repr=False)
     tenant_id: str
     workspace_id: str
     feishu_app_id: str = ""
@@ -189,6 +188,8 @@ class GrowthSettings:
     reddit_base_url: str = "https://www.reddit.com"
     hn_base_url: str = "https://hn.algolia.com"
     llm_model: str = ""
+    llm_scoring_model: str = ""
+    llm_drafting_model: str = ""
     llm_base_url: str = ""
     llm_api_key: str = field(default="", repr=False)
     llm_timeout_seconds: float = 60.0
@@ -325,6 +326,8 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'opportunity_core'`.
 - [ ] **Step 3: Move models and provider contracts**
 
 Move the exact definitions of `ProviderStatus`, `AuthKind`, `Capability`, `ProviderInfo`, `ProviderHealth`, `SearchQuery`, and `Signal` from `app/schemas.py` into `opportunity_core/models.py`. Keep `ProviderErrorInfo` in `app/schemas.py` because it is API-specific.
+
+`opportunity_core/__init__.py` re-exports those seven names (`from opportunity_core.models import ...` plus `__all__`), so `from opportunity_core import Signal` works.
 
 At the top of `app/schemas.py`, replace the moved definitions with:
 
@@ -509,6 +512,7 @@ create table if not exists config_versions (
   record_id uuid not null,
   version int not null,
   diff jsonb not null,
+  snapshot jsonb not null default '{}'::jsonb,
   changed_by text,
   created_at timestamptz not null default now()
 );
@@ -769,6 +773,7 @@ create index if not exists outreach_messages_list_idx
 create table if not exists outreach_versions (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id) on delete cascade,
+  workspace_id uuid references workspaces(id) on delete cascade,
   message_id uuid not null references outreach_messages(id) on delete cascade,
   version int not null,
   subject text,
@@ -806,6 +811,7 @@ create index if not exists approval_requests_pending_idx
 
 create table if not exists rate_limit_rules (
   tenant_id uuid not null references tenants(id) on delete cascade,
+  workspace_id uuid references workspaces(id) on delete cascade,
   channel text not null,
   scope text not null check (scope in ('global','platform','subreddit','user')),
   scope_key text not null default '*',
@@ -820,6 +826,7 @@ create table if not exists rate_limit_rules (
 
 create table if not exists rate_limit_counters (
   tenant_id uuid not null references tenants(id) on delete cascade,
+  workspace_id uuid references workspaces(id) on delete cascade,
   channel text not null,
   scope text not null,
   scope_key text not null,
@@ -831,6 +838,7 @@ create table if not exists rate_limit_counters (
 create table if not exists suppression_list (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id) on delete cascade,
+  workspace_id uuid references workspaces(id) on delete cascade,
   kind text not null check (kind in ('email','platform_user','domain')),
   value text not null,
   reason text not null check (reason in (
@@ -856,6 +864,8 @@ create table if not exists delivery_log (
 create index if not exists delivery_log_message_idx
   on delivery_log(tenant_id, message_id, received_at desc);
 ```
+
+`outreach_versions`, `rate_limit_rules`, `rate_limit_counters`, and `suppression_list` carry `workspace_id` as a nullable FK because they are written from tenant-level operations (versioning, rate enforcement, suppression) that do not always carry a workspace; rows created from a workspace context set it. `outreach_versions` has no `status`/`updated_at` because versions are immutable.
 
 `0003_rls.sql`:
 
@@ -959,7 +969,7 @@ Expected: FAIL because `seed_tenant` does not exist.
 
 - [ ] **Step 3: Implement seed constants and idempotent inserts**
 
-`seed_data.py` defines the exact prompt strings, rubric JSON, and rate rules. Use `string.Template` placeholders (`$title`, `$body`, `$platform`, `$community`, `$age_days`, `$product_name`, `$product_url`, `$previous_reply`, `$followup_index`).
+`seed_tenant` first inserts the `tenants` and `workspaces` rows if missing (`insert ... on conflict do nothing`), then all defaults. `seed_data.py` defines the exact prompt strings, rubric JSON, and rate rules. Use `string.Template` placeholders (`$title`, `$body`, `$platform`, `$community`, `$age_days`, `$product_name`, `$product_url`, `$previous_reply`, `$followup_index`).
 
 `SOCIAL_INTENT_SYSTEM`:
 
@@ -1061,10 +1071,12 @@ Seed provider configs:
 ("social_source", "reddit", 10, {"base_url": "https://www.reddit.com"}, "GROWTH_REDDIT_USER_AGENT")
 ("social_source", "hackernews", 20, {"base_url": "https://hn.algolia.com"}, null)
 ("notifier", "feishu", 10, {"chat_id_env": "GROWTH_FEISHU_CHAT_ID"}, "GROWTH_FEISHU_APP_SECRET")
-("llm", "openai_compatible", 10, {"model_env": "GROWTH_LLM_MODEL", "base_url_env": "GROWTH_LLM_BASE_URL"}, "GROWTH_LLM_API_KEY")
+("llm", "openai_compatible", 10, {"base_url": "https://api.openai.com/v1"}, "GROWTH_LLM_API_KEY")
 ```
 
-Seed rate rules with `insert ... on conflict do nothing`:
+The scoring and drafting model names are **not** stored in the provider config; they come from `GrowthSettings.llm_scoring_model` and `GrowthSettings.llm_drafting_model` so the cheap/strong split is configurable without a config row. The seeded config only provides the OpenAI-compatible `base_url`; the API key comes from `secret_ref`.
+
+Seed rate rules with `insert ... on conflict do nothing` (tenant-level rows leave `workspace_id` null):
 
 ```sql
 ('social', 'global', '*', 86400, 50)
@@ -1098,7 +1110,7 @@ git commit -m "feat: seed growth tenant defaults"
 - Test: `server/tests/growth/test_repository_postgres.py`
 
 **Interfaces:**
-- Produces models in `growth_core.schemas`: `NewTask`, `PipelineTask`, `NewOutboxMessage`, `OutboxMessage`, `ProviderConfig`, `PromptTemplate`, `ScoringRubric`, `RateLimitRule`, `RateLimitCheck`, `RateLimitDecision`, `NewAuditEntry`, `GrowthSource`, `NewSocialLead`, `SocialLead`, `NewOutreachMessage`, `OutreachMessage`, `NewOutreachVersion`, `OutreachVersion`, `NewApprovalRequest`, `ApprovalRequest`.
+- Produces models in `growth_core.schemas`: `NewTask`, `PipelineTask`, `NewOutboxMessage`, `OutboxMessage`, `ProviderConfig`, `PromptTemplate`, `ScoringRubric`, `RateLimitRule`, `RateLimitCheck`, `RateLimitDecision`, `NewAuditEntry`, `GrowthSource`, `NewSocialLead`, `SocialLead`, `NewOutreachMessage`, `OutreachMessage`, `NewOutreachVersion`, `OutreachVersion`, `NewApprovalRequest`, `ApprovalRequest`, `NewDeliveryLog`.
 - Produces `GrowthRepository` protocol in `repositories/base.py` with these exact methods:
 
 ```python
@@ -1127,6 +1139,7 @@ class GrowthRepository(Protocol):
     async def is_suppressed(self, tenant_id: UUID, kind: str, value: str) -> bool: ...
     async def add_suppression(self, tenant_id: UUID, kind: str, value: str, reason: str, source: str = "") -> None: ...
     async def write_audit(self, entry: NewAuditEntry) -> None: ...
+    async def rollback_config_version(self, tenant_id: UUID, version_id: UUID, changed_by: str) -> bool: ...
 
     async def list_enabled_sources(self, tenant_id: UUID) -> list[GrowthSource]: ...
     async def update_source_run(self, tenant_id: UUID, source_id: UUID, last_run_at: datetime, last_error: str | None = None) -> None: ...
@@ -1494,6 +1507,10 @@ Status transitions always use `UPDATE ... WHERE tenant_id=$1 AND id=$2 AND statu
 
 `ensure_tenant(tenant_id, workspace_id)` is a test/helper method that inserts a tenant and workspace if missing; production uses the seed script. `add_source(source)` inserts one `growth_sources` row. `truncate_all_for_tests()` runs `TRUNCATE tenants CASCADE` and is test-only (never exposed by the API).
 
+The `New*` models omit status columns that are NOT NULL in SQL. The repository injects the initial status in SQL: `queued` for tasks, `pending` for outbox messages and approval requests, `discovered` for leads, `draft_ready` for messages. Callers never pass these.
+
+`rollback_config_version` reads `config_versions.snapshot`, updates the row in the whitelisted `table_name` (`prompt_templates`, `scoring_rubrics`, `provider_configs`, `rate_limit_rules`) by `record_id`, and writes a new `config_versions` row recording the rollback. Unknown table names raise `ValueError`.
+
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd server && GROWTH_TEST_DATABASE_URL=postgresql://... python -m pytest tests/growth/test_repository_postgres.py -q`
@@ -1517,7 +1534,7 @@ git commit -m "feat: add postgres growth repository"
 **Interfaces:**
 - Produces `FakeGrowthRepository` implementing every `GrowthRepository` method with dict/list storage. Expose the stored lists as `repo.leads`, `repo.messages`, `repo.sources`, `repo.approvals`, `repo.outbox`, and `repo.tasks`; `ensure_tenant` is a no-op, `add_source` appends to `repo.sources`, and `close` is a no-op.
 - Produces helpers:
-  - `FakeGrowthRepository.tasks_for(idempotency_key: str) -> list[PipelineTask]`
+  - `FakeGrowthRepository.tasks_for(idempotency_key_prefix: str) -> list[PipelineTask]` — matches `startswith`, because follow-up keys are compound (`followup:{original_id}:{message_id}`).
   - `FakeGrowthRepository.outbox_for(idempotency_key: str) -> list[OutboxMessage]`
   - `FakeGrowthRepository.set_rate_counter(tenant_id, channel, scope, scope_key, window_start, count)`
 
@@ -1678,7 +1695,7 @@ async def require_service_token(request: Request) -> None:
         raise HTTPException(status_code=401, detail="invalid service token")
 ```
 
-`get_context` reads `X-Tenant-Id` and `X-Workspace-Id`; if absent, falls back to `settings.tenant_id` / `settings.workspace_id` for local single-tenant use. `Idempotency-Key` is optional for GET, required for the three POST task endpoints: missing key → `400 INVALID_IDEMPOTENCY_KEY`.
+`get_context` reads `X-Tenant-Id` and `X-Workspace-Id`; if absent, falls back to `settings.tenant_id` / `settings.workspace_id` for local single-tenant use. Both are parsed with `UUID(...)` and invalid values return `400 INVALID_TENANT_ID` / `400 INVALID_WORKSPACE_ID`. `Idempotency-Key` is optional for GET, required for the three POST task endpoints: missing key → `400 INVALID_IDEMPOTENCY_KEY`.
 
 `core.py` exposes `/healthz`.
 
@@ -1687,7 +1704,7 @@ async def require_service_token(request: Request) -> None:
 - score: `pipeline="social"`, `task_type="social.score"`, payload `{"lead_id": str(body.lead_id)}`; idempotency key `score:{lead_id}` (ignore the header for this deterministic key).
 - draft: `pipeline="social"`, `task_type="social.draft"`, payload `{"lead_id": str(body.lead_id)}`; idempotency key `draft:{lead_id}`.
 
-`growth_social/main.py` creates the FastAPI app, stores `settings`, `repo`, `adapters`, `notifier`, `llm` on `app.state`, includes the core router and social router, and mounts no static frontend.
+`growth_social/main.py` defines `create_social_app(...)`, which stores `settings`, `repo`, `adapters`, `notifier`, `llm` on `app.state`, includes the core router and social router, and mounts no static frontend. Do **not** create a module-level `app` here; Task 21 adds the runtime entrypoint.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1710,6 +1727,7 @@ git commit -m "feat: add growth internal API auth and task endpoints"
 - Create: `server/growth_core/adapters/base.py` (minimal: `AdapterHealth` only)
 - Create: `server/growth_core/adapters/feishu.py`
 - Create: `server/growth_core/services/feishu_signature.py`
+- Modify: `server/tests/growth/fakes.py` (add `FakeNotifier`)
 - Test: `server/tests/growth/test_feishu.py`
 
 **Interfaces:**
@@ -1846,10 +1864,10 @@ git commit -m "feat: add feishu notifier and callback verification"
 
 **Interfaces:**
 - Produces:
-  - `AdapterError`, `ProviderNotConfigured`, `ProviderAuthError`, `ProviderRateLimited`, `ProviderUnavailable`, `ProviderBadOutput`
+  - `AdapterError`, `ProviderNotConfigured`, `ProviderAuthError`, `ProviderRateLimited`, `ProviderTimeout`, `ProviderUnavailable`, `ProviderBadOutput`
   - `AdapterHealth(name: str, status: str, detail: str = "")` (already created in Task 9; extend the file, do not redefine it)
   - `RawPost` dataclass
-  - `SourceAdapter` protocol: `name`, `async fetch(source: GrowthSource) -> list[RawPost]`, `async health() -> AdapterHealth`
+  - `SourceAdapter` protocol: `name`, `capabilities: dict[str, Any]`, `async fetch(source: GrowthSource) -> list[RawPost]`, `async health() -> AdapterHealth`, `def validate_config(self) -> None`
   - `Notifier` protocol: `async send_card(chat_id, card) -> str`, `async health() -> AdapterHealth`
   - `LLMClient` protocol: `async complete_json(*, system: str, user: str, schema: type[BaseModel], model: str | None = None) -> BaseModel`
   - `SecretResolver` protocol + `EnvSecretResolver`
@@ -1901,11 +1919,21 @@ Expected: FAIL because the modules do not exist.
 
 - [ ] **Step 3: Implement protocols, registry, and secret resolver**
 
-`AdapterRegistry` stores `{(capability, provider): factory}` from the decorator and `{(capability, provider): ProviderConfig}` from the constructor. `source`, `notifier`, and `llm` call the factory with `(config, secrets)`. Missing config or factory → `ProviderNotConfigured(f"PROVIDER_NOT_CONFIGURED: {capability}/{provider}")`.
+`AdapterRegistry` stores `{(capability, provider): factory}` from the decorator and `{(capability, provider): ProviderConfig}` from the constructor. A **factory is always a callable `factory(config: ProviderConfig, secrets: SecretResolver) -> adapter`**. `source`, `notifier`, and `llm` call it with `(config, secrets)`. Missing config or factory → `ProviderNotConfigured(f"PROVIDER_NOT_CONFIGURED: {capability}/{provider}")`.
+
+Adapters with keyword-only constructors register a small factory function that delegates to their classmethod, e.g.:
+
+```python
+@register_adapter("social_source", "reddit")
+def _reddit_factory(config, secrets):
+    return RedditAdapter.from_config(config, secrets)
+```
+
+Registering a class directly is allowed only when its constructor signature is `(config, secrets)`.
 
 `EnvSecretResolver.get(ref)` returns `os.environ[ref]`; missing raises `ProviderNotConfigured` naming the env var, never the value.
 
-Then update `feishu.py`: import `register_adapter`, decorate `FeishuNotifier` with `@register_adapter("notifier", "feishu")`, and add `from_config(config, secrets)` reading `chat_id` from `config.config.get("chat_id_env", "GROWTH_FEISHU_CHAT_ID")` via `os.environ` and the app secret via `secrets.get(config.secret_ref)`. The app ID comes from `GROWTH_FEISHU_APP_ID` (or `config.config["app_id_env"]`).
+Then update `feishu.py`: import `register_adapter`, add a `@register_adapter("notifier", "feishu")` factory `_feishu_factory(config, secrets)` returning `FeishuNotifier.from_config(config, secrets)`, and implement `from_config` reading `chat_id` from `config.config.get("chat_id_env", "GROWTH_FEISHU_CHAT_ID")` via `os.environ` and the app secret via `secrets.get(config.secret_ref)`. The app ID comes from `GROWTH_FEISHU_APP_ID` (or `config.config["app_id_env"]`).
 
 `RawPost`:
 
@@ -1950,7 +1978,7 @@ git commit -m "feat: add growth adapter registry"
 - Produces:
   - `TaskHandler = Callable[[PipelineTask], Awaitable[None]]`
   - `TaskRouter.register(task_type: str, handler: TaskHandler) -> None`
-  - `TaskRouter.handle(task: PipelineTask) -> None`
+  - `async TaskRouter.handle(task: PipelineTask) -> None`
   - `async def run_once(repo, router, *, worker_id: str, now: datetime | None = None) -> bool`
   - `async def run_forever(repo, router, *, worker_id: str, poll_seconds: float = 2.0, stop: asyncio.Event | None = None) -> None`
   - `async def dispatch_outbox(repo, notifier, *, limit: int = 10, now: datetime | None = None) -> int`
@@ -1966,8 +1994,12 @@ async def test_run_once_claims_and_completes(repo, now):
     from growth_core.services.worker import TaskRouter, run_once
 
     seen = []
+
+    async def demo(task):
+        seen.append(task)
+
     router = TaskRouter()
-    router.register("demo", seen.append)
+    router.register("demo", demo)
     tenant_id, workspace_id = uuid4(), uuid4()
     await repo.enqueue_task(NewTask(
         tenant_id=tenant_id, workspace_id=workspace_id,
@@ -2038,7 +2070,7 @@ git commit -m "feat: add growth worker and outbox dispatcher"
 - Produces `RedditAdapter(*, client: httpx.AsyncClient, user_agent: str, base_url: str = "https://www.reddit.com")`
 - `name = "reddit"`, `async fetch(source: GrowthSource) -> list[RawPost]`, `async health() -> AdapterHealth`
 - `@classmethod def from_config(cls, config: ProviderConfig, secrets: SecretResolver) -> RedditAdapter`
-- Registered with `@register_adapter("social_source", "reddit")`.
+- Registered with `@register_adapter("social_source", "reddit")` on a module-level factory `_reddit_factory(config, secrets) -> RedditAdapter` that delegates to `from_config`.
 - Reads `source.config`: `subreddit: str`, `keywords: list[str]` (optional), `limit: int` (default 25).
 
 - [ ] **Step 1: Write the failing tests**
@@ -2093,7 +2125,7 @@ Expected: FAIL because `reddit.py` does not exist.
 
 - [ ] **Step 3: Implement the adapter**
 
-Decorate the class with `@register_adapter("social_source", "reddit")`. `from_config` reads `config.config.get("base_url", "https://www.reddit.com")`, resolves the user agent via `secrets.get(config.secret_ref)` when `secret_ref` is present, and creates an `httpx.AsyncClient(timeout=20)`.
+Register the `_reddit_factory` function (not the class) with `@register_adapter("social_source", "reddit")`. `from_config` reads `config.config.get("base_url", "https://www.reddit.com")`, resolves the user agent via `secrets.get(config.secret_ref)` when `secret_ref` is present, and creates an `httpx.AsyncClient(timeout=20)`.
 
 GET `{base_url}/r/{subreddit}/new.json?limit={limit}` with `User-Agent`. For each child:
 - Skip `stickied` and non-dict data.
@@ -2111,7 +2143,7 @@ Error mapping:
 - 5xx/timeout → `ProviderUnavailable`
 - 404 → `ProviderNotConfigured` with a hint that the subreddit may not exist.
 
-`health()` does a HEAD/GET to `{base_url}/r/{default_subreddit}/new.json?limit=1` only if a source is available; otherwise return `AdapterHealth(name="reddit", status="ready")` without a network call. Keep it network-free in v1.
+`health()` returns `AdapterHealth(name="reddit", status="ready")` without a network call in v1; the ingestion task reports real fetch failures through `update_source_run`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -2137,7 +2169,7 @@ git commit -m "feat: add reddit source adapter"
 - Produces `HackerNewsAdapter(*, client: httpx.AsyncClient, base_url: str = "https://hn.algolia.com")`
 - `name = "hackernews"`, `async fetch(source: GrowthSource) -> list[RawPost]`, `async health() -> AdapterHealth`
 - `@classmethod def from_config(cls, config: ProviderConfig, secrets: SecretResolver) -> HackerNewsAdapter`
-- Registered with `@register_adapter("social_source", "hackernews")`.
+- Registered with `@register_adapter("social_source", "hackernews")` on a module-level factory `_hackernews_factory(config, secrets) -> HackerNewsAdapter` that delegates to `from_config`.
 - Reads `source.config`: `query: str`, `limit: int` (default 25).
 
 - [ ] **Step 1: Write the failing test**
@@ -2190,14 +2222,14 @@ Expected: FAIL because `hackernews.py` does not exist.
 
 - [ ] **Step 3: Implement the adapter**
 
-Decorate the class with `@register_adapter("social_source", "hackernews")`. `from_config` reads `config.config.get("base_url", "https://hn.algolia.com")` and creates an `httpx.AsyncClient(timeout=20)`.
+Register the `_hackernews_factory` function with `@register_adapter("social_source", "hackernews")`. `from_config` reads `config.config.get("base_url", "https://hn.algolia.com")` and creates an `httpx.AsyncClient(timeout=20)`.
 
 GET `{base_url}/api/v1/search_by_date` with params `query`, `tags="story"`, `hitsPerPage=limit`. Map:
 - `platform_post_id = str(hit["objectID"])`
 - `title = hit.get("title") or ""`
 - `body = hit.get("story_text") or hit.get("comment_text") or ""`
 - `author_public = hit.get("author")`
-- `source_url = hit.get("url") or f"https://news.ycombinator.com/item?id={id}"`
+- `source_url = hit.get("url") or f"https://news.ycombinator.com/item?id={platform_post_id}"`
 - `published_at = datetime.fromtimestamp(hit["created_at_i"], tz=timezone.utc)`
 - `metrics = {"points": hit.get("points", 0), "comments": hit.get("num_comments", 0)}`
 - `subreddit = None`
@@ -2229,6 +2261,7 @@ git commit -m "feat: add hacker news source adapter"
 **Interfaces:**
 - Produces:
   - `async def ingest_social(repo: GrowthRepository, adapters: Mapping[str, SourceAdapter], *, tenant_id: UUID, workspace_id: UUID, now: datetime | None = None) -> IngestResult`
+  - `SourceError(source_id: UUID, code: str, message: str)` dataclass
   - `IngestResult(created: int, duplicates: int, errors: list[SourceError])`
 - Lead dedupe key: `sha256(f"{platform}:{platform_post_id}")`.
 
@@ -2297,7 +2330,7 @@ For each enabled source:
 - Call `repo.update_source_run(...)` on success or with `last_error` on failure.
 - Catch `AdapterError` per source, append `SourceError(source_id, code, message)`, and continue.
 
-`FakeGrowthRepository` needs `add_source(source)` for tests; add it in `fakes.py` (test-only helper), not the protocol.
+`add_source` is part of `GrowthRepository` (Task 6) and already implemented by `FakeGrowthRepository` (Task 7); do not add a second version.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -2325,7 +2358,7 @@ git commit -m "feat: add social ingestion with dedupe"
   - `class OpenAICompatibleLLM` with `async complete_json(*, system: str, user: str, schema: type[BaseModel], model: str | None = None) -> BaseModel`
   - Constructor: `OpenAICompatibleLLM(*, api_key: str, model: str, base_url: str | None = None, timeout: float = 60.0, client: Any | None = None)`
   - `@classmethod def from_config(cls, config: ProviderConfig, secrets: SecretResolver) -> OpenAICompatibleLLM`
-  - Registered with `@register_adapter("llm", "openai_compatible")`.
+  - Registered with `@register_adapter("llm", "openai_compatible")` on a module-level factory `_llm_factory(config, secrets)` that delegates to `from_config`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2379,7 +2412,7 @@ Expected: FAIL because `llm.py` does not exist.
 
 - [ ] **Step 3: Implement the client**
 
-Register with `@register_adapter("llm", "openai_compatible")`. `from_config` reads `model`/`base_url` from `config.config`, resolves `api_key` via `secrets.get(config.secret_ref)`, and returns the client.
+Register `_llm_factory` with `@register_adapter("llm", "openai_compatible")`. `from_config` reads `base_url` from `config.config` and `model` from `config.config.get("model", "")` (the seeded config has no model; scoring and drafting pass their own model on every call), resolves `api_key` via `secrets.get(config.secret_ref)`, and returns the client.
 
 `extract_json` strips whitespace, strips a leading ```/```json fence and trailing ```, then `json.loads`; on failure raise `ProviderBadOutput`.
 
@@ -2408,7 +2441,9 @@ git commit -m "feat: add openai-compatible llm client"
 **Files:**
 - Create: `server/growth_social/schemas.py`
 - Create: `server/growth_social/services/scoring.py`
+- Create: `server/tests/growth/golden/social_posts.jsonl`
 - Test: `server/tests/growth/test_scoring.py`
+- Test: `server/tests/growth/test_prompt_regression.py`
 
 **Interfaces:**
 - Produces in `growth_social/schemas.py`:
@@ -2437,7 +2472,7 @@ class IntentScore(BaseModel):
     summary: str = ""
 ```
 
-- Produces `async def score_lead(repo, llm, *, tenant_id: UUID, lead_id: UUID, now: datetime | None = None) -> IntentScore`
+- Produces `async def score_lead(repo, llm, *, tenant_id: UUID, lead_id: UUID, model: str = "", now: datetime | None = None) -> IntentScore`
 - Algorithm: `round(sum(d.score * weight / 10) + sum(p.points))`, clamped to 0–100; thresholds from the rubric.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2464,7 +2499,17 @@ async def test_penalty_can_downgrade_below_threshold(repo, now):
 async def test_missing_dimension_is_bad_output(repo, now):
     # FakeLLM omits reply_safety; expect ProviderBadOutput and lead unchanged
     ...
+
+
+# test_prompt_regression.py
+async def test_golden_set_precision_at_threshold():
+    # 50 labeled posts in golden/social_posts.jsonl, each with expected_status
+    # and a fixture of model dimensions; run the server scorecard over them and
+    # assert precision(qualified) >= 0.8 at threshold 80.
+    ...
 ```
+
+`golden/social_posts.jsonl` has 50 lines, each `{"id","platform","title","body","age_days","expected_status","dimensions","penalties"}`. Write 25 qualified and 25 non-qualified synthetic posts across Reddit/HN, including ads, already-solved, stale, and duplicate cases. The deterministic regression test uses the stored `dimensions`/`penalties` (no API); a second test with `@pytest.mark.skipif(not os.getenv("GROWTH_TEST_LLM"), ...)` calls the real LLM on the same 50 posts and asserts the same precision floor.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -2475,7 +2520,7 @@ Expected: FAIL because `scoring.py` does not exist.
 
 Load `lead`, `rubric = await repo.get_scoring_rubric(tenant_id, "social_intent")`, and `prompt = await repo.get_prompt_template(tenant_id, "social_intent")`. Render the user prompt with `string.Template.safe_substitute(platform=..., community=..., age_days=..., title=..., body=...)`.
 
-Call `llm.complete_json(system=..., user=..., schema=IntentScoreDraft)`. Validate that the returned dimensions exactly match the rubric ids; missing or unknown id → `ProviderBadOutput`.
+Call `llm.complete_json(system=..., user=..., schema=IntentScoreDraft, model=model or None)`. Validate that the returned dimensions exactly match the rubric ids; missing or unknown id → `ProviderBadOutput`. The scoring handler passes `settings.llm_scoring_model` (Task 21), keeping scoring on the cheap model.
 
 Compute the score. `status` = `qualified` if `score >= rubric.thresholds["qualified"]`; `watch` if `>= rubric.thresholds["watch"]`; else `dropped`.
 
@@ -2483,7 +2528,7 @@ Update the lead with `repo.update_lead_status(tenant_id, lead_id, expected_statu
 
 If `status == "qualified"`, enqueue `NewTask(pipeline="social", task_type="social.draft", payload={"lead_id": str(lead_id)}, idempotency_key=f"draft:{lead_id}")`.
 
-If the lead is already scored (`lead.score is not None`), return the existing `IntentScore` without calling the LLM.
+If the lead is already scored (`lead.score is not None`), return `IntentScore(score=lead.score, status=lead.status if lead.status in {"qualified","watch","dropped"} else "watch", dimensions=[], penalties=[], summary="")` without calling the LLM, and do not enqueue a duplicate draft task.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -2493,7 +2538,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add server/growth_social/schemas.py server/growth_social/services/scoring.py server/tests/growth/test_scoring.py
+git add server/growth_social/schemas.py server/growth_social/services/scoring.py server/tests/growth/test_scoring.py server/tests/growth/test_prompt_regression.py server/tests/growth/golden
 git commit -m "feat: add server-side intent scoring"
 ```
 
@@ -2506,6 +2551,7 @@ git commit -m "feat: add server-side intent scoring"
 - Create: `server/growth_social/services/link_policy.py`
 - Create: `server/growth_social/services/cards.py`
 - Create: `server/growth_social/services/drafting.py`
+- Modify: `server/growth_social/schemas.py` (add `ReplyDraft`)
 - Test: `server/tests/growth/test_link_policy.py`
 - Test: `server/tests/growth/test_drafting.py`
 
@@ -2566,6 +2612,11 @@ def test_no_link_subreddit_marks_manual_only():
     result = validate_link_policy(text, CFG, subreddit_allows_links=False)
     assert result.ok is False
     assert result.manual_only is True
+
+
+def test_link_before_value_rejected():
+    text = "https://example.com/guides/churn?utm_source=reddit&utm_medium=reply&utm_campaign=x I built Example."
+    assert "LINK_TOO_EARLY" in validate_link_policy(text, CFG).violations
 ```
 
 - [ ] **Step 2: Write the failing drafting tests**
@@ -2595,7 +2646,7 @@ async def test_no_link_subreddit_is_suppressed(repo, fake_llm, fake_notifier, no
 
 - [ ] **Step 3: Implement link policy and drafting**
 
-`build_utm_url` joins `base_url.rstrip("/") + link_path`, parses it, and sets `utm_source=platform`, `utm_medium=reply`, `utm_campaign=lead_id` using `urllib.parse.urlencode`. It must preserve existing query params and reject `link_path` that starts with `http://`, `https://`, `//`, or contains `..`.
+`build_utm_url` joins `base_url.rstrip("/") + link_path`, parses it, and sets `utm_source=UTM_SOURCES.get(platform, platform)` (mapping `reddit` → `reddit`, `hackernews` → `hn`), `utm_medium=reply`, `utm_campaign=lead_id` using `urllib.parse.urlencode`. It must preserve existing query params and reject `link_path` that starts with `http://`, `https://`, `//`, or contains `..`.
 
 `validate_link_policy`:
 - Extract URLs with `re.findall(r"https?://[^\s)\]>]+", text)`.
@@ -2605,13 +2656,15 @@ async def test_no_link_subreddit_is_suppressed(repo, fake_llm, fake_notifier, no
 - Path must not be empty or `/`.
 - Query must contain `utm_source`, `utm_medium=reply`, non-empty `utm_campaign`.
 - Text must contain a disclosure phrase case-insensitively: `i built`, `i work on`, `our team built`, `we built`, `i'm building`, `i am building`.
+- Link position: the disclosure phrase must appear **before** the URL, and the URL must not appear in the first sentence (before the first `. ` or newline). Otherwise add `LINK_TOO_EARLY`.
 - If `subreddit_allows_links=False`, set `manual_only=True` and add `SUBREDDIT_NO_LINKS`; drafting converts that to `suppressed`.
 
 `draft_reply`:
 - Before calling the LLM, check `existing = await repo.find_message_by_dedupe_key(tenant_id, f"draft:{lead_id}")`; if it exists, return it after ensuring its approval request and Feishu outbox row exist (use deterministic `approval_id = f"{existing.id}:v{latest.version}"` and outbox key `feishu:{approval_id}`). This makes worker retries safe even if the previous attempt crashed between writes.
 - Load lead and `prompt = repo.get_prompt_template(tenant_id, "social_reply")`.
+- Build `score = IntentScore(score=lead.score or 0, status=lead.status if lead.status in {"qualified","watch","dropped"} else "watch", dimensions=[], penalties=[], summary="")` for the approval card.
 - Render user prompt with `string.Template.safe_substitute`.
-- Call `llm.complete_json(..., schema=ReplyDraft)`.
+- Call `llm.complete_json(..., schema=ReplyDraft, model=settings.llm_drafting_model or None)` so drafting uses the stronger model.
 - Require exactly one `{{LINK}}`; otherwise create a `rejected` message with `metadata.policy_violations=["PLACEHOLDER_COUNT"]` and audit, return it.
 - `url = build_utm_url(settings.product_url, draft.link_path, lead_id=str(lead.id), platform=lead.platform)`.
 - `final_text = draft.body_markdown.replace("{{LINK}}", url)`.
@@ -2619,9 +2672,9 @@ async def test_no_link_subreddit_is_suppressed(repo, fake_llm, fake_notifier, no
 - `policy = validate_link_policy(final_text, LinkPolicyConfig(allowed_domain=settings.product_domain), subreddit_allows_links=subreddit_allows_links)`.
 - If `policy.manual_only`: create message `status="suppressed"` with `dedupe_key=f"draft:{lead.id}"`, metadata `{"policy_violations": policy.violations}`, audit; return.
 - If not `policy.ok`: create message `status="rejected"` with `dedupe_key=f"draft:{lead.id}"`, metadata `{"policy_violations": policy.violations}`, audit; return.
-- Otherwise create `OutreachMessage` with `channel="social"`, `provider=lead.platform`, `lead_id=lead.id`, `status="draft_ready"`, `dedupe_key=f"draft:{lead.id}"`, metadata `{"subreddit": lead.subreddit, "has_link": True, "platform": lead.platform}`.
-- Create `OutreachVersion(version=1, body_text=final_text, cta_url=url, model=llm.model, prompt_version=str(prompt.version), risk_flags=draft.risk_flags)`.
-- Create `ApprovalRequest(approval_id=f"{message.id}:v1", provider="feishu", payload={"chat_id": settings.feishu_chat_id})`.
+- Otherwise create `OutreachMessage` with `channel="social"`, `provider=lead.platform`, `lead_id=lead.id`, `workspace_id=workspace_id`, `status="draft_ready"`, `dedupe_key=f"draft:{lead.id}"`, metadata `{"subreddit": lead.subreddit, "has_link": True, "platform": lead.platform, "draft_version": 1}`.
+- Create `OutreachVersion(version=1, workspace_id=workspace_id, body_text=final_text, cta_url=url, model=llm.model, prompt_version=str(prompt.version), risk_flags=draft.risk_flags)`.
+- Create `ApprovalRequest(approval_id=f"{message.id}:v1", workspace_id=workspace_id, provider="feishu", payload={"chat_id": settings.feishu_chat_id})`.
 - Build the card and enqueue `NewOutboxMessage(topic="feishu.card", payload={"chat_id": settings.feishu_chat_id, "card": card, "approval_id": approval.approval_id}, idempotency_key=f"feishu:{approval.approval_id}")`.
 - Update lead to `draft_ready` with `expected_status="qualified"`.
 - Write audit entries for `social.draft_created` and `social.draft_rejected`/`social.draft_suppressed`.
@@ -2718,6 +2771,8 @@ Expected: FAIL because `approval.py` does not exist.
 - `edit`: no state change; return `pending` with a message telling the operator to use the Admin UI.
 - `later`: no state change; return `pending`.
 
+The callback endpoint (`/internal/v1/approvals/callback`) is **exempt from `X-Service-Token`** because Feishu cannot send it; it is authenticated only by the signature/verification-token checks below. Every other `/internal/v1/*` endpoint keeps the service token.
+
 The callback endpoint:
 - Reads raw body bytes.
 - If `settings.feishu_encrypt_key`: verify signature; invalid → 403.
@@ -2728,9 +2783,9 @@ The callback endpoint:
 Revision endpoint:
 - Load message; allow only `draft_ready` or `approved`.
 - Validate the new text with `validate_link_policy` using the settings domain and the lead’s subreddit rules. Invalid → 422 with `violations`.
-- Create a new `OutreachVersion` with `version = latest.version + 1`.
+- Create a new `OutreachVersion` with `version = latest.version + 1` and `workspace_id`.
 - `await repo.expire_pending_approvals(tenant_id, message_id)` so old Feishu cards cannot approve the new version.
-- Reset message to `draft_ready` (from `approved` or `draft_ready`), create a new `ApprovalRequest`, enqueue a new Feishu card outbox message.
+- Reset message to `draft_ready` (from `approved` or `draft_ready`), update metadata `draft_version = new_version`, create a new `ApprovalRequest(approval_id=f"{message.id}:v{new_version}")`, enqueue a new Feishu card outbox message with key `feishu:{approval_id}`.
 - Preserve all previous versions and approval records.
 - Audit `social.revised` with operator and version.
 
@@ -2828,8 +2883,8 @@ Use the first matching rule per scope; if a rule is disabled, skip it. Call `rep
 - Load lead. If this is the **original** message (`message.metadata.get("followup_of")` is absent) and `lead.status` is `sent`/`replied`/`converted`, raise `SendBlocked("ALREADY_CONTACTED")`. Follow-up messages are allowed while the lead is `sent`; if a follow-up and `lead.status` is `replied`/`converted`/`suppressed`/`rejected`, raise `SendBlocked("LEAD_CLOSED")`.
 - If `lead.author_public`, check `repo.is_suppressed(tenant_id, "platform_user", f"{lead.platform}:{lead.author_public}")`; if true, set message `suppressed` (expected `approved`), audit, raise `SendBlocked("SUPPRESSED")`.
 - Build `RateLimitContext(tenant_id, "social", lead.platform, lead.subreddit, has_link=True, now=now or sent_at or utcnow())`.
-- If denied, write audit `social.send_blocked` with the exceeded scope, and raise `SendBlocked("RATE_LIMITED", f"{scope}:{key}")`. Do **not** change the message status; the operator can retry after the window.
-- Otherwise `repo.update_message_status(expected_status="approved", status="sent", sent_at=..., provider=lead.platform, metadata_patch={"channel": channel, "subreddit": lead.subreddit, "has_link": True})`; if `False`, reload and raise `SendBlocked("CONCURRENT_UPDATE")`.
+- If denied, write audit `social.send_blocked` with the exceeded scope, set the message to `suppressed` (expected `approved`), and raise `SendBlocked("RATE_LIMITED", f"{scope}:{key}")`. The operator must create a new draft after the window; an over-limit message never stays approved.
+- Otherwise load `latest = await repo.get_latest_version(tenant_id, message_id)` and `repo.update_message_status(expected_status="approved", status="sent", sent_at=..., provider=lead.platform, metadata_patch={"channel": channel, "subreddit": lead.subreddit, "has_link": True, "draft_version": latest.version if latest else 0})`; if `False`, reload and raise `SendBlocked("CONCURRENT_UPDATE")`.
 - `repo.update_lead_status(expected_status=lead.status, status="sent")`; ignore a concurrency conflict if the lead is already `sent`.
 - `await repo.expire_pending_approvals(tenant_id, message_id)` so a delayed Feishu tap cannot re-approve a sent message.
 - Write `delivery_log` via `repo.record_delivery(...)` (declared in Task 6): event `sent`, provider `lead.platform`, payload `{"channel": channel}`.
@@ -2911,7 +2966,7 @@ Expected: FAIL because `followup.py` does not exist.
 - Load `prompt = repo.get_prompt_template(tenant_id, "social_followup")` and the previous version text.
 - Call `llm.complete_json(..., schema=ReplyDraft)` with `$title`, `$body`, `$previous_reply`, `$followup_index`, `$product_name`.
 - Apply the same placeholder/link-policy validation as Task 17. Invalid → create `rejected` message and audit, return it (do not send another follow-up).
-- Create a new `OutreachMessage` with `metadata={"followup_of": str(original_message_id), "followup_index": count + 1, "subreddit": lead.subreddit, "has_link": True}`; create version 1; create approval request; enqueue Feishu card.
+- Create a new `OutreachMessage` with `dedupe_key=f"followup:{original_message_id}:{count + 1}"` and `metadata={"followup_of": str(original_message_id), "followup_index": count + 1, "subreddit": lead.subreddit, "has_link": True, "draft_version": 1}`; create version 1; create approval request with `approval_id=f"{message.id}:v1"`; enqueue Feishu card.
 - Set `run_after` not here; the next check is scheduled when the human marks this follow-up sent. `mark_sent` reads `metadata.followup_of` and enqueues the next check.
 - Audit `social.followup_created`.
 
@@ -2936,7 +2991,9 @@ git commit -m "feat: add bounded social follow-up"
 **Files:**
 - Create: `server/growth_social/handlers.py`
 - Create: `server/growth_social/worker.py`
+- Create: `server/growth_social/asgi.py`
 - Create: `server/growth_core/worker.py`
+- Modify: `server/growth_social/main.py`
 - Test: `server/tests/growth/test_social_e2e.py`
 
 **Interfaces:**
@@ -2945,8 +3002,10 @@ git commit -m "feat: add bounded social follow-up"
   - `social.score` → `score_lead`
   - `social.draft` → `draft_reply`
   - `social.followup_check` → `process_followup_check`
+- Produces `async def build_social_adapters(repo, settings) -> AdapterRegistry` that loads `social_source` provider configs and enabled sources, constructs the registry, and returns it.
 - Produces `python -m growth_social.worker` entrypoint that loads settings, creates a Postgres pool/repository, builds adapters/notifier/llm, runs `run_forever` and `dispatch_outbox` in one event loop.
-- Produces `python -m growth_social.main` serving the FastAPI app.
+- Produces `python -m growth_social.main` serving the FastAPI app by delegating to `growth_social.asgi:app`.
+- `growth_social/asgi.py` defines the module-level `app = create_social_app(...)` from environment; tests never import it.
 
 - [ ] **Step 1: Write the failing end-to-end test**
 
@@ -2987,18 +3046,17 @@ Expected: FAIL because handlers/worker wiring does not exist.
 
 - [ ] **Step 3: Implement handlers and entrypoints**
 
-`handlers.py` registers the four task types. Each handler loads the task payload (`lead_id` or `message_id`), calls the corresponding service, and returns. Handler exceptions propagate to `run_once`, which records them.
+`handlers.py` registers the four task types. Payload keys: `social.ingest` none; `social.score` and `social.draft` use `lead_id`; `social.followup_check` uses `original_message_id`. The score handler passes `model=settings.llm_scoring_model`; the draft handler relies on `draft_reply` using `settings.llm_drafting_model`. Handler exceptions propagate to `run_once`, which records them.
 
 `growth_core/worker.py` is the generic loop entrypoint placeholder; `growth_social/worker.py` is the real composition root:
 - `settings = GrowthSettings.from_env()`
 - `repo = await PostgresGrowthRepository.connect(settings.database_url)`
-- `adapters = build_social_adapters(repo, settings)` (loads provider configs and constructs Reddit/HN; uses `AdapterRegistry`)
-- `notifier = FeishuNotifier(...)`
-- `llm = OpenAICompatibleLLM(...)`
-- `router = build_social_router(...)`
+- `configs = await repo.list_provider_configs(settings.tenant_id, "social_source")`; `registry = AdapterRegistry(configs, EnvSecretResolver())`; `sources = await repo.list_enabled_sources(settings.tenant_id)`; `adapters = {s.source_type: registry.source(s.source_type) for s in sources if s.enabled}`. `build_social_adapters` returns `(registry, adapters)`.
+- `notifier = registry.notifier()`; `llm = registry.llm()`
+- `router = build_social_router(repo=repo, adapters=adapters, notifier=notifier, llm=llm, settings=settings)`
 - loop: `await run_once(...)`; `await dispatch_outbox(repo, notifier)`; sleep when idle.
 
-`growth_social/main.py` uses `create_social_app` with the same composition root and runs `uvicorn`.
+`growth_social/asgi.py` builds the same composition root and exposes `app = create_social_app(...)`. `growth_social/main.py` runs `uvicorn growth_social.asgi:app`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -3008,7 +3066,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add server/growth_social/handlers.py server/growth_social/worker.py server/growth_core/worker.py server/tests/growth/test_social_e2e.py
+git add server/growth_social/handlers.py server/growth_social/worker.py server/growth_social/asgi.py server/growth_social/main.py server/growth_core/worker.py server/tests/growth/test_social_e2e.py
 git commit -m "feat: wire social pipeline end to end"
 ```
 
@@ -3019,11 +3077,11 @@ git commit -m "feat: wire social pipeline end to end"
 **Files:**
 - Create: `server/tests/growth/test_postgres_integration.py`
 - Modify: `server/tests/growth/conftest.py`
+- Modify: `server/growth_core/repositories/postgres.py`
 - Test: `server/tests/growth/test_postgres_integration.py`
 
 **Interfaces:**
-- Produces fixture `pg_repo` gated by `GROWTH_TEST_DATABASE_URL`.
-- Produces fixture `truncate_growth` that truncates all growth tables between tests.
+- Produces fixture `pg_repo` gated by `GROWTH_TEST_DATABASE_URL`; it applies migrations, truncates, and yields a connected repository. No separate `truncate_growth` fixture.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3091,6 +3149,7 @@ Also test:
 - `test_outbox_retry_marks_sent`
 - `test_upsert_lead_dedupes`
 - `test_claim_task_skip_locked_with_two_connections`
+- `test_config_rollback_restores_snapshot` (write a `prompt_templates` row, record a `config_versions` snapshot with an older template, roll back, assert the template text is restored and a new version row exists)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -3128,10 +3187,16 @@ GROWTH_FEISHU_APP_SECRET=
 GROWTH_FEISHU_VERIFICATION_TOKEN=
 GROWTH_FEISHU_ENCRYPT_KEY=
 GROWTH_FEISHU_CHAT_ID=
+GROWTH_FEISHU_BASE_URL=https://open.feishu.cn
 GROWTH_REDDIT_USER_AGENT=growth-agent/0.1 (by /u/yourname)
+GROWTH_REDDIT_BASE_URL=https://www.reddit.com
+GROWTH_HN_BASE_URL=https://hn.algolia.com
 GROWTH_LLM_MODEL=
+GROWTH_LLM_SCORING_MODEL=
+GROWTH_LLM_DRAFTING_MODEL=
 GROWTH_LLM_BASE_URL=
 GROWTH_LLM_API_KEY=
+GROWTH_LLM_TIMEOUT_SECONDS=60
 GROWTH_PRODUCT_NAME=
 GROWTH_PRODUCT_URL=https://example.com
 GROWTH_PRODUCT_DOMAIN=example.com
@@ -3140,6 +3205,9 @@ GROWTH_REDDIT_DAILY_LIMIT=5
 GROWTH_SUBREDDIT_LINK_DAILY_LIMIT=2
 GROWTH_FOLLOWUP_MAX_TOTAL=3
 GROWTH_FOLLOWUP_MIN_INTERVAL_HOURS=24
+GROWTH_WORKER_ID=growth-worker-1
+GROWTH_WORKER_POLL_SECONDS=2
+GROWTH_STALE_LOCK_SECONDS=600
 ```
 
 - [ ] **Step 2: Write `server/docs/growth-runbook.md`**
@@ -3150,7 +3218,7 @@ Cover:
 - Feishu app: permissions (`im:message`, `im:message:send_as_bot`), event subscription URL `/internal/v1/approvals/callback`, encrypt key/verification token, chat ID.
 - n8n: every 30 minutes POST `/internal/v1/social/ingest` with `X-Service-Token`, tenant/workspace headers, and `Idempotency-Key: ingest-{{$now.toFormat('yyyyMMddHHmm')}}`.
 - Worker: `python -m growth_social.worker`.
-- API: `uvicorn growth_social.main:app --host 0.0.0.0 --port 8780`.
+- API: `uvicorn growth_social.asgi:app --host 0.0.0.0 --port 8780`.
 - Manual send: open Feishu card → copy draft → paste into platform → click “已发送”/POST sent. Never automate the platform.
 - Troubleshooting: 401 token, 403 Feishu signature, `RATE_LIMITED`, `SUPPRESSED`, dead tasks, outbox dead letters.
 - Acceptance checklist from spec §6.11 and DoD.
@@ -3189,7 +3257,7 @@ git commit -m "docs: add growth agent runbook and tracking links"
 ## Task 24: Final verification and acceptance pass
 
 **Files:**
-- Modify: `ideas_pool/GROWTH_AGENT_TRACKING.md`
+- Modify: `GROWTH_AGENT_TRACKING.md`
 - Test: all commands below
 
 - [ ] **Step 1: Run the full existing + new unit suite**
@@ -3205,7 +3273,7 @@ Expected: all existing Opportunity Scout tests pass plus all non-integration gro
 
 ```bash
 cd /Volumes/work/workspace/superAgent/ideas_pool/server
-GROWTH_TEST_DATABASE_URL=postgresql://... python -m pytest tests/growth/test_postgres_integration.py tests/growth/test_migrations.py tests/growth/test_seed.py -q
+GROWTH_TEST_DATABASE_URL=postgresql://... python -m pytest tests/growth/test_postgres_integration.py tests/growth/test_repository_postgres.py tests/growth/test_migrations.py tests/growth/test_seed.py -q
 ```
 
 Expected: PASS (or skip if no database URL is provided; a release candidate requires PASS).
