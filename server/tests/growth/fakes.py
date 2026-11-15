@@ -45,7 +45,7 @@ from growth_core.schemas import (
     SocialLead,
 )
 
-__all__ = ["FakeGrowthRepository"]
+__all__ = ["FakeGrowthRepository", "FakeNotifier"]
 
 _OUTBOX_MAX_ATTEMPTS = 5
 
@@ -1093,3 +1093,21 @@ class FakeGrowthRepository:
             ),
             None,
         )
+
+
+class FakeNotifier:
+    """In-memory notifier that records every card it is asked to send."""
+
+    def __init__(self) -> None:
+        self.cards: list[dict] = []
+        self.calls: list[tuple[str, dict]] = []
+
+    async def send_card(self, chat_id: str, card: dict) -> str:
+        self.calls.append((chat_id, card))
+        self.cards.append(card)
+        return f"fake-{len(self.cards)}"
+
+    async def health(self):
+        from growth_core.adapters.base import AdapterHealth
+
+        return AdapterHealth(name="fake", status="ready")
