@@ -38,6 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         registry, adapters = await build_social_adapters(repo, settings)
         app.state.repo = repo
+        app.state.registry = registry
         app.state.adapters = adapters
         app.state.notifier = registry.notifier()
         app.state.llm = registry.llm()

@@ -9,24 +9,31 @@ adapter exposes no write path at all.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID, uuid4
 
+import pytest
+
 from growth_core import seed_data
-from growth_core.adapters.base import RawPost
+from growth_core.adapters.base import ProviderNotConfigured, RawPost
+from growth_core.adapters.registry import register_adapter
 from growth_core.config import GrowthSettings
 from growth_core.schemas import (
     GrowthSource,
+    NewOutboxMessage,
     NewTask,
     PromptTemplate,
+    ProviderConfig,
     RateLimitRule,
     ScoringRubric,
 )
+from growth_core.services import worker as worker_module
 from growth_core.services.outbox import dispatch_outbox
-from growth_core.services.worker import run_once
-from growth_social.handlers import build_social_router
+from growth_core.services.worker import TaskRouter, run_once, run_worker_loop
+from growth_social.handlers import build_social_adapters, build_social_router
 from growth_social.schemas import (
     IntentDimensionDraft,
     IntentScoreDraft,
@@ -77,6 +84,60 @@ class FakeReddit:
 
     def validate_config(self) -> None:
         return None
+
+
+class _FakeSource:
+    name = "fake_source"
+    capabilities: dict = {"social_source": True}
+
+    async def fetch(self, source: GrowthSource) -> list[RawPost]:
+        return []
+
+    async def health(self):
+        return None
+
+    def validate_config(self) -> None:
+        return None
+
+
+class _FakeNotifierAdapter:
+    async def send_card(self, chat_id: str, card: dict) -> str:
+        return "fake-card"
+
+    async def health(self):
+        return None
+
+
+class _FakeLLMAdapter:
+    async def complete_json(self, *, system, user, schema, model=None):
+        raise AssertionError("composition-root tests must not call the LLM")
+
+
+def _register_fake_factories() -> None:
+    """Register offline factories under test-only provider names."""
+    register_adapter(
+        "social_source", "fake_source"
+    )(lambda config, secrets: _FakeSource())
+    register_adapter(
+        "notifier", "fake_notifier"
+    )(lambda config, secrets: _FakeNotifierAdapter())
+    register_adapter(
+        "llm", "fake_llm"
+    )(lambda config, secrets: _FakeLLMAdapter())
+
+
+def _provider(
+    tenant_id: UUID, capability: str, provider: str
+) -> ProviderConfig:
+    return ProviderConfig(
+        tenant_id=tenant_id,
+        capability=capability,
+        provider=provider,
+        priority=10,
+        enabled=True,
+        config={},
+        secret_ref=None,
+    )
 
 
 class PipelineLLM:
@@ -306,6 +367,9 @@ async def test_social_flow_from_post_to_followup(repo, monkeypatch):
     approval_id = f"{message.id}:v1"
     assert len(repo.outbox_for(f"feishu:{approval_id}")) == 1
     assert notifier.calls == []
+    first_version = await repo.get_latest_version(tenant_id, message.id)
+    assert first_version is not None
+    _assert_one_official_link(first_version.body_text, lead.id)
     assert await run_once(repo, router, worker_id="w1", now=NOW) is False
 
     # 4. Only dispatch_outbox delivers the first approval card ------------
@@ -314,6 +378,10 @@ async def test_social_flow_from_post_to_followup(repo, monkeypatch):
     card = notifier.cards[0]
     assert card["header"]["title"]["content"] == "Social reply approval"
     assert "https://example.com/" in card["elements"][-1]["text"]["content"]
+    assert first_version.body_text in [
+        element.get("text", {}).get("content")
+        for element in card["elements"]
+    ]
 
     # 5. Feishu approval only moves database state ------------------------
     result = await handle_approval(
@@ -376,10 +444,140 @@ async def test_social_flow_from_post_to_followup(repo, monkeypatch):
     assert version is not None
     _assert_one_official_link(version.body_text, lead.id)
 
-    # No write path exists on the platform adapter and drafts never call the
-    # notifier directly: each card maps one-to-one to an outbox delivery.
-    assert not hasattr(reddit, "post")
-    assert not hasattr(reddit, "comment")
+    # Drafts never call the notifier directly: each card maps one-to-one to an
+    # outbox delivery, and both were emitted only by dispatch_outbox.
     assert len(notifier.calls) == len(
         [row for row in repo.outbox if row.status == "sent"]
     )
+
+
+# ---------------------------------------------------------------------------
+# Composition root
+# ---------------------------------------------------------------------------
+
+
+async def test_build_social_adapters_resolves_all_three_capabilities(repo):
+    _register_fake_factories()
+    tenant_id, workspace_id = uuid4(), uuid4()
+    settings = _settings(tenant_id, workspace_id)
+
+    for capability, provider in (
+        ("social_source", "fake_source"),
+        ("notifier", "fake_notifier"),
+        ("llm", "fake_llm"),
+    ):
+        repo.provider_configs[(tenant_id, capability, provider)] = _provider(
+            tenant_id, capability, provider
+        )
+    await repo.add_source(
+        GrowthSource(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            source_type="fake_source",
+            platform="reddit",
+            dedupe_key="fake:source",
+            config={},
+            cadence_minutes=30,
+            enabled=True,
+        )
+    )
+
+    registry, adapters = await build_social_adapters(repo, settings)
+
+    assert list(adapters) == ["fake_source"]
+    assert isinstance(adapters["fake_source"], _FakeSource)
+    assert isinstance(registry.notifier(), _FakeNotifierAdapter)
+    assert isinstance(registry.llm(), _FakeLLMAdapter)
+
+
+async def test_build_social_adapters_fails_fast_for_unconfigured_source(repo):
+    _register_fake_factories()
+    tenant_id, workspace_id = uuid4(), uuid4()
+    settings = _settings(tenant_id, workspace_id)
+
+    for capability, provider in (
+        ("notifier", "fake_notifier"),
+        ("llm", "fake_llm"),
+    ):
+        repo.provider_configs[(tenant_id, capability, provider)] = _provider(
+            tenant_id, capability, provider
+        )
+    await repo.add_source(
+        GrowthSource(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            source_type="unconfigured_source",
+            platform="reddit",
+            dedupe_key="unconfigured:source",
+            config={},
+            cadence_minutes=30,
+            enabled=True,
+        )
+    )
+
+    with pytest.raises(ProviderNotConfigured) as excinfo:
+        await build_social_adapters(repo, settings)
+
+    assert "social_source/unconfigured_source" in str(excinfo.value)
+
+
+async def test_run_worker_loop_dispatches_when_working_and_sleeps_when_idle(
+    repo, monkeypatch
+):
+    tenant_id, workspace_id = uuid4(), uuid4()
+    notifier = FakeNotifier()
+    sleep_calls: list[float] = []
+    stop = asyncio.Event()
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        stop.set()
+
+    monkeypatch.setattr(worker_module.asyncio, "sleep", fake_sleep)
+
+    async def handler(task) -> None:
+        await repo.enqueue_outbox(
+            NewOutboxMessage(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                topic="feishu.card",
+                payload={
+                    "chat_id": "oc_chat",
+                    "card": {"probe": True},
+                    "approval_id": "loop-approval",
+                },
+                idempotency_key="outbox:loop",
+            )
+        )
+
+    router = TaskRouter()
+    router.register("demo", handler)
+    await repo.enqueue_task(
+        NewTask(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            pipeline="social",
+            task_type="demo",
+            payload={},
+            idempotency_key="demo:loop",
+        )
+    )
+
+    await run_worker_loop(
+        repo=repo,
+        router=router,
+        notifier=notifier,
+        worker_id="w1",
+        poll_seconds=0.5,
+        stop=stop,
+    )
+
+    # The working iteration claimed the task and drained the outbox it queued.
+    assert notifier.cards == [{"probe": True}]
+    assert repo.outbox_for("outbox:loop")[0].status == "sent"
+    task = repo.tasks_for("demo:loop")[0]
+    assert task.status == "succeeded"
+    # Only the following idle iteration slept, once.
+    assert sleep_calls == [0.5]

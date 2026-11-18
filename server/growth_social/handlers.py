@@ -98,7 +98,11 @@ async def build_social_adapters(
     provider; a missing one raises ``ProviderNotConfigured`` at startup.
     """
     tenant_id = UUID(settings.tenant_id)
-    configs = await repo.list_provider_configs(tenant_id, "social_source")
+    configs = []
+    for capability in ("social_source", "notifier", "llm"):
+        configs.extend(
+            await repo.list_provider_configs(tenant_id, capability)
+        )
     registry = AdapterRegistry(configs, EnvSecretResolver())
     sources = await repo.list_enabled_sources(tenant_id)
     adapters = {
