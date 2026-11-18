@@ -16,8 +16,10 @@
 
 只启动 API 不会产生审批卡：草稿任务把 `feishu.card` 写入 `outbox_messages`，必须由 worker 的 `dispatch_outbox` 发出。Postgres 是唯一事实来源，n8n 不直接写业务表。
 
+以下命令默认从仓库根目录执行，先 `cd server`。
+
 ```bash
-cd /Volumes/work/workspace/superAgent/ideas_pool/server
+cd server
 cp .env.growth.example .env.growth     # 首次；填入真实值
 set -a; source .env.growth; set +a
 ```
@@ -48,11 +50,11 @@ set -a; source .env.growth; set +a
 ## 1. Supabase / Postgres
 
 1. 在 Supabase 新建项目，从 **Project Settings → Database → Connection string (URI)** 取连接串。迁移包含 DDL 且使用 `asyncpg`，建议用 **5432 直连或 session pooler**；事务模式 pooler（6543）未验证。
-2. Python 服务使用该 DSN 连接。迁移会在业务表上启用 RLS，而策略依赖 `auth.jwt()`；服务端不设置 JWT claims，因此**生产 DSN 必须使用表 owner（如 Supabase `postgres`）或具备 BYPASSRLS 的角色**。用受限角色连库，查询会被 RLS 过滤成空结果。
+2. Python 服务使用该 DSN 连接。迁移会在业务表上启用 RLS，而策略依赖 `auth.jwt()`；服务端不设置 JWT claims，因此**生产 DSN 必须使用表 owner（如 Supabase `postgres`）或具备 BYPASSRLS 的角色**。用受限角色连库时，缺少 schema `auth` 的 USAGE 会直接报权限错误；即使授权齐全，未设置 JWT claims 也会让 RLS 把查询过滤成空结果。
 3. 写入 `.env.growth` 后执行迁移（幂等，可重复运行）：
 
 ```bash
-cd /Volumes/work/workspace/superAgent/ideas_pool/server
+cd server
 set -a; source .env.growth; set +a
 python -m growth_core.migrate
 ```
@@ -62,7 +64,7 @@ python -m growth_core.migrate
 ## 2. 初始化租户与采集源
 
 ```bash
-cd /Volumes/work/workspace/superAgent/ideas_pool/server
+cd server
 set -a; source .env.growth; set +a
 python -m growth_core.scripts.seed \
   --tenant-id 00000000-0000-0000-0000-000000000001 \
@@ -104,6 +106,8 @@ SQL
 ```
 
 `cadence_minutes` 只是记录值；实际每 30 分钟触发由 n8n 负责（见 §4）。
+
+worker 在启动时按当时已启用的源构建 `source_type → adapter` 映射（`build_social_adapters`）。新增采集源后，若是此前未启用的 `source_type`，必须重启 worker；否则 ingest 会记录 `ADAPTER_NOT_CONFIGURED: no adapter for source_type <type>`。同一 `source_type` 下增加额外采集源通常无需重启。
 
 ## 3. 飞书应用
 
@@ -168,7 +172,7 @@ n8n 不得直接写业务表；所有状态变更走 `/internal/v1/*`（ADR-12�
 ## 5. 启动 worker 与 API
 
 ```bash
-cd /Volumes/work/workspace/superAgent/ideas_pool/server
+cd server
 set -a; source .env.growth; set +a
 
 # 终端 1：任务 + outbox（飞书卡片）
@@ -212,14 +216,14 @@ curl -X POST "http://127.0.0.1:8780/api/growth/social/messages/<message-id>/sent
 单元测试（不需要数据库）：
 
 ```bash
-cd /Volumes/work/workspace/superAgent/ideas_pool/server
+cd server
 python -m pytest -q
 ```
 
 Postgres 集成测试：
 
 ```bash
-cd /Volumes/work/workspace/superAgent/ideas_pool/server
+cd server
 GROWTH_TEST_DATABASE_URL='postgresql://user:password@host:5432/growth_test' \
   python -m pytest tests/growth/test_postgres_integration.py \
                    tests/growth/test_repository_postgres.py \
@@ -231,7 +235,7 @@ GROWTH_TEST_DATABASE_URL='postgresql://user:password@host:5432/growth_test' \
 
 - `GROWTH_TEST_DATABASE_URL` 必须指向**专用的、可随时丢弃的测试库**。`pg_repo` fixture 会调用 `truncate_all_for_tests()`，清空**所有租户**的增长数据；绝不能指向生产或共享 staging。
 - 未设置 `GROWTH_TEST_DATABASE_URL` 时，数据库相关用例会 skip；发布候选必须实际跑通。
-- RLS 用例会创建 `growth_test_app` 角色并授权、依赖表所有权。DSN 必须是**有权限的角色**（建角色 / 表 owner）；受限 CI 角色会直接报错，而不是 skip。
+- RLS 用例会创建 `growth_test_app` 角色并授权，并在事务中 `set local role growth_test_app`；这通常要求 superuser 或对该角色有 membership，另外建角色/授权还需要 CREATEROLE 与表所有权。DSN 必须是具备这些权限的角色；受限 CI 角色会直接报错，而不是 skip。
 - 迁移在测试库上幂等执行；同一测试库不要并发跑多组集成测试。
 
 ## 8. 故障排查
@@ -264,7 +268,7 @@ order by window_start desc;
 
 ### `SUPPRESSED`
 
-- 命中 `suppression_list` 或超限时，消息置 `suppressed`，`POST .../sent` 返回 409 `SUPPRESSED`；跟进检查也会停止。
+- 命中 `suppression_list` 时，消息置 `suppressed`，`POST .../sent` 返回 409 `SUPPRESSED`；跟进检查也会停止。（频率超限是 `RATE_LIMITED`，见上一节。）
 - 查看原因：
 
 ```sql
@@ -278,7 +282,7 @@ order by created_at desc;
 
 ### `pipeline_runs` 出现 `dead`
 
-- 任务失败按 `60 * 2^attempts` 秒退避重试，默认 `max_attempts=5`，达到上限置 `dead`，`last_error` 保留稳定错误码（如 `PROVIDER_NOT_CONFIGURED: llm model`、`RATE_LIMITED`）。
+- 任务失败按 `60 * 2^attempts` 秒退避重试，默认 `max_attempts=5`，达到上限置 `dead`。`last_error` 的格式是 `{异常类名}: {消息}`，例如 `ProviderNotConfigured: PROVIDER_NOT_CONFIGURED: llm model` 或 `ProviderRateLimited: PROVIDER_RATE_LIMITED: llm rate limited`。
 
 ```sql
 select id, pipeline, task_type, attempts, max_attempts, status, last_error,
