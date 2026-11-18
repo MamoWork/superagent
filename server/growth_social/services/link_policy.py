@@ -113,8 +113,16 @@ class LinkPolicyResult:
 
 
 def _is_ignored_file_token(token: str) -> bool:
-    """Whether a bare-domain token looks like ``name.ext`` or ``name.ext/x``."""
+    """Whether a bare-domain token looks like ``name.ext``.
+
+    Only filename-shaped tokens (no path or query) are ignored. Suffixes such
+    as ``md``, ``py``, ``rs``, ``sh``, ``ts`` and ``go`` are also real ccTLDs,
+    so ``evil.md/path`` must stay counted as a URL; otherwise a second link
+    could slip past the exactly-one-link rule.
+    """
     host_part = re.split(r"[/?#]", token, maxsplit=1)[0]
+    if host_part != token:
+        return False
     host_part = host_part.split(":", 1)[0]
     suffix = host_part.rsplit(".", 1)[-1].lower()
     return suffix in _IGNORED_FILE_SUFFIXES

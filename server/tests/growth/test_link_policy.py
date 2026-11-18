@@ -142,7 +142,7 @@ def test_alternate_link_forms_are_detected_and_rejected(text, expected):
 def test_file_extension_is_not_a_link():
     text = (
         "I built Example. Node.js users often hit this wall; "
-        "package.json/config stays untouched; "
+        "package.json stays untouched; "
         f"this checklist helps: https://example.com/guides/churn?{_VALID_QUERY}"
     )
 
@@ -152,8 +152,19 @@ def test_file_extension_is_not_a_link():
     assert result.link_url == f"https://example.com/guides/churn?{_VALID_QUERY}"
 
 
-@pytest.mark.parametrize("extra", ["acme.io", "evil.com?x=1"])
-def test_bare_domain_without_a_path_is_counted(extra):
+def test_file_names_alone_are_not_links():
+    result = validate_link_policy(
+        "I built Example. Check node.js and package.json for details.", CFG
+    )
+
+    assert result.violations == ["NO_LINK"]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    ["acme.io", "evil.com?x=1", "evil.md/path", "evil.rs?x=1"],
+)
+def test_bare_domain_token_is_counted(extra):
     text = (
         "I built Example. See "
         f"https://example.com/guides/churn?{_VALID_QUERY} and {extra}"
@@ -161,6 +172,20 @@ def test_bare_domain_without_a_path_is_counted(extra):
 
     result = validate_link_policy(text, CFG)
 
+    assert result.ok is False
+    assert "MULTIPLE_LINKS" in result.violations
+    assert result.link_url is None
+
+
+def test_denylisted_suffix_with_path_is_counted_fail_closed():
+    text = (
+        "I built Example. The file package.json/config is irrelevant; "
+        f"this checklist helps: https://example.com/guides/churn?{_VALID_QUERY}"
+    )
+
+    result = validate_link_policy(text, CFG)
+
+    # ``package.json/config`` could be a real ccTLD path, so it fails closed.
     assert result.ok is False
     assert "MULTIPLE_LINKS" in result.violations
     assert result.link_url is None
