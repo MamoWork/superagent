@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 __all__ = [
@@ -51,8 +52,20 @@ _DISCLOSURE_PHRASES = (
 )
 
 _UTM_KEYS = frozenset({"utm_source", "utm_medium", "utm_campaign"})
-_URL_PATTERN = re.compile(r"https?://[^\s)\]>]+")
+# Order matters: the scheme/protocol-relative and ``www.`` forms are matched
+# first so the bare-domain branch never double-counts a URL inside them. A
+# bare domain must carry a path (``example.com/x``); that keeps file names such
+# as ``node.js`` from being mistaken for links.
+_URL_PATTERN = re.compile(
+    r"(?P<scheme>(?:https?:)?//[^\s<>\[\]\"'`)]+)"
+    r"|(?P<www>www\.[^\s<>\[\]\"'`)]+)"
+    r"|(?P<domain>(?<![\w@./-])"
+    r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}"
+    r"(?::\d+)?/[^\s<>\[\]\"'`)]*)",
+    re.IGNORECASE,
+)
 _TRAILING_PUNCTUATION = ".,;:!?'\""
+_SCHEME_PATTERN = re.compile(r"https?://", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -75,14 +88,38 @@ class LinkPolicyResult:
 
 
 def _extract_urls(text: str) -> list[tuple[str, int]]:
-    """Return ``(cleaned_url, start_offset)`` for each URL found in ``text``."""
+    """Return ``(cleaned_url, start_offset)`` for each URL token in ``text``.
+
+    Detects explicit ``http(s)://`` links (any case), protocol-relative
+    ``//host`` links, ``www.`` prefixed links, and bare domains with a path.
+    Each token is counted once: markdown links and autolinks contribute only
+    the URL inside them.
+    """
     found: list[tuple[str, int]] = []
     for match in _URL_PATTERN.finditer(text):
         cleaned = match.group(0).rstrip(_TRAILING_PUNCTUATION)
-        if cleaned.endswith(")"):
-            cleaned = cleaned[:-1]
-        found.append((cleaned, match.start()))
+        if cleaned:
+            found.append((cleaned, match.start()))
     return found
+
+
+def _parse_url(token: str) -> tuple[Any, bool]:
+    """Parse a detected token; return ``(urlsplit_result, has_http_scheme)``.
+
+    Scheme-less forms are parsed with a placeholder scheme so the host and path
+    checks still run; the missing scheme is then reported as ``INVALID_URL``.
+    """
+    has_scheme = bool(_SCHEME_PATTERN.match(token))
+    if has_scheme:
+        candidate = token
+    elif token.startswith("//"):
+        candidate = "http:" + token
+    else:
+        candidate = "http://" + token
+    try:
+        return urlsplit(candidate), has_scheme
+    except ValueError:
+        return None, has_scheme
 
 
 def _first_sentence_end(text: str) -> int:
@@ -171,16 +208,20 @@ def validate_link_policy(
     else:
         link_url, url_start = urls[0]
 
-        parts = None
-        try:
-            parts = urlsplit(link_url)
-        except ValueError:
-            parts = None
+        parts, has_scheme = _parse_url(link_url)
+        host = None
+        if parts is not None:
+            try:
+                host = parts.hostname.lower() if parts.hostname else None
+            except ValueError:
+                host = None
 
-        host = parts.hostname.lower() if parts and parts.hostname else None
-        if parts is None or parts.scheme not in ("http", "https") or not host:
+        # Fail closed: a token without an http(s) scheme, an unparseable URL,
+        # or one without a host is invalid even if its text looks plausible.
+        if parts is None or not has_scheme or not host:
             violations.append("INVALID_URL")
-        else:
+
+        if host is not None and parts is not None:
             if _is_shortener(host):
                 violations.append("SHORTENER")
 

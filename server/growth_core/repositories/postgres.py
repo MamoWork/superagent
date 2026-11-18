@@ -1117,6 +1117,36 @@ class PostgresGrowthRepository:
             lead_id,
         )
 
+    async def has_contacted_author(
+        self,
+        tenant_id: UUID,
+        platform: str,
+        author_public: str,
+        exclude_message_id: UUID,
+    ) -> bool:
+        return bool(
+            await self._pool.fetchval(
+                """
+                select exists (
+                    select 1
+                    from outreach_messages m
+                    join social_leads l
+                      on l.id = m.lead_id and l.tenant_id = m.tenant_id
+                    where m.tenant_id = $1
+                      and l.platform = $2
+                      and l.author_public = $3
+                      and m.id <> $4
+                      and m.status in ('sent', 'replied', 'converted')
+                      and (m.metadata->>'followup_of') is null
+                )
+                """,
+                tenant_id,
+                platform,
+                author_public,
+                exclude_message_id,
+            )
+        )
+
     # ------------------------------------------------------------------
     # Approval requests
     # ------------------------------------------------------------------

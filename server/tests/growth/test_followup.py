@@ -122,6 +122,7 @@ def _make_lead(
         "author_public": "alice",
         "source_url": "https://reddit.example/r/SaaS/post/1",
         "subreddit": "SaaS",
+        "subreddit_rules": {"self_promotion_allowed": True},
         "dedupe_key": str(uuid4()),
         "status": "qualified",
         "score": 91,

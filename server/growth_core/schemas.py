@@ -147,7 +147,7 @@ class RateLimitDecision(BaseModel):
 class NewAuditEntry(BaseModel):
     tenant_id: UUID
     workspace_id: UUID | None = None
-    actor_type: Literal["user", "service", "n8n", "system"]
+    actor_type: Literal["user", "service", "n8n", "system", "integration"]
     actor_id: str | None = None
     action: str
     entity_type: str

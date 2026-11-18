@@ -118,6 +118,17 @@ def _render_user_prompt(
     )
 
 
+def _draft_task(lead_id: UUID, tenant_id: UUID, workspace_id: UUID) -> NewTask:
+    return NewTask(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        pipeline="social",
+        task_type="social.draft",
+        payload={"lead_id": str(lead_id)},
+        idempotency_key=f"draft:{lead_id}",
+    )
+
+
 def _validate_draft(
     draft: IntentScoreDraft, rubric: ScoringRubric
 ) -> None:
@@ -149,6 +160,14 @@ async def score_lead(
     lead = await repo.get_lead(tenant_id, lead_id)
     if lead is None:
         raise LookupError(_MISSING_LEAD)
+
+    if lead.status == "qualified":
+        # Recover a lost draft enqueue from an earlier scoring attempt. The
+        # stable ``draft:{lead_id}`` key makes this a no-op when the task is
+        # already queued, running, or done.
+        await repo.enqueue_task(
+            _draft_task(lead.id, lead.tenant_id, lead.workspace_id)
+        )
 
     if lead.score is not None:
         return IntentScore(
@@ -214,14 +233,7 @@ async def score_lead(
 
     if intent.status == "qualified":
         await repo.enqueue_task(
-            NewTask(
-                tenant_id=lead.tenant_id,
-                workspace_id=lead.workspace_id,
-                pipeline="social",
-                task_type="social.draft",
-                payload={"lead_id": str(lead_id)},
-                idempotency_key=f"draft:{lead_id}",
-            )
+            _draft_task(lead.id, lead.tenant_id, lead.workspace_id)
         )
 
     return intent

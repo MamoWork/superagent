@@ -24,6 +24,20 @@ _MISSING_ADAPTER = "ADAPTER_NOT_CONFIGURED"
 _UNEXPECTED = "UNEXPECTED_ERROR"
 
 
+class _EnqueueFailed(Exception):
+    """Wrap a task-enqueue failure so the source-level handler re-raises it.
+
+    Ingest's per-source isolation must not turn a queue outage into a recorded
+    source error: the task has to fail so ``run_once`` retries it. The next
+    attempt treats the already-persisted lead as a duplicate and re-enqueues
+    its score task.
+    """
+
+    def __init__(self, original: Exception) -> None:
+        self.original = original
+        super().__init__(str(original))
+
+
 @dataclass(frozen=True)
 class SourceError:
     """A source-level failure captured during an ingestion run."""
@@ -92,6 +106,18 @@ def _score_task(
     )
 
 
+async def _enqueue_score(
+    repo: GrowthRepository,
+    lead_id: UUID,
+    tenant_id: UUID,
+    workspace_id: UUID,
+) -> None:
+    try:
+        await repo.enqueue_task(_score_task(lead_id, tenant_id, workspace_id))
+    except Exception as exc:  # noqa: BLE001 - re-raised as a task failure
+        raise _EnqueueFailed(exc) from exc
+
+
 async def _record_error(
     repo: GrowthRepository,
     tenant_id: UUID,
@@ -156,11 +182,22 @@ async def ingest_social(
                 )
                 if created:
                     result.created += 1
-                    await repo.enqueue_task(
-                        _score_task(lead.id, tenant_id, workspace_id)
+                    await _enqueue_score(
+                        repo, lead.id, tenant_id, workspace_id
                     )
                 else:
                     result.duplicates += 1
+                    # A previous attempt may have persisted the lead but lost
+                    # its enqueue (or the worker died in between). The key is
+                    # stable, so this is a no-op when the task already exists.
+                    if lead.score is None:
+                        await _enqueue_score(
+                            repo, lead.id, tenant_id, workspace_id
+                        )
+        except _EnqueueFailed as exc:
+            # Queue failures are not source failures: surface them so the
+            # ingest task retries instead of reporting a clean run.
+            raise exc.original from exc
         except AdapterError as exc:
             await _record_error(
                 repo,

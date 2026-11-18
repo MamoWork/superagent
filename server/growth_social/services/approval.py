@@ -91,10 +91,11 @@ def _card_score(lead: SocialLead) -> IntentScore:
 def subreddit_allows_links(lead: SocialLead) -> bool:
     """Link allowance follows the configured rule's truthiness.
 
-    A missing key defaults to allowed; ``None``, ``0``, ``""`` and ``False``
-    all mean links are not allowed for this subreddit.
+    Fail closed: a missing ``self_promotion_allowed`` key defaults to *not*
+    allowed, so an unconfigured subreddit can never produce a sendable draft.
+    ``None``, ``0``, ``""`` and ``False`` are also treated as not allowed.
     """
-    return bool(lead.subreddit_rules.get("self_promotion_allowed", True))
+    return bool(lead.subreddit_rules.get("self_promotion_allowed", False))
 
 
 async def ensure_approval_and_enqueue_card(

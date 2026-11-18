@@ -291,6 +291,79 @@ async def test_upsert_lead_deduplicates(repo):
     assert fetched is not None and fetched.id == first.id
 
 
+async def test_has_contacted_author_ignores_followups_and_excluded_message(repo):
+    tenant_id, workspace_id = await _fresh_tenant(repo)
+    lead = (
+        await repo.upsert_lead(
+            NewSocialLead(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                platform="reddit",
+                platform_post_id="author-post-1",
+                author_public="alice",
+                source_url="https://example.com/author-1",
+                dedupe_key="author-lead:1",
+            )
+        )
+    )[0]
+    other_lead = (
+        await repo.upsert_lead(
+            NewSocialLead(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                platform="reddit",
+                platform_post_id="author-post-2",
+                author_public="alice",
+                source_url="https://example.com/author-2",
+                dedupe_key="author-lead:2",
+            )
+        )
+    )[0]
+
+    original = await repo.create_message(
+        NewOutreachMessage(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            channel="social",
+            lead_id=lead.id,
+            status="sent",
+            dedupe_key="author-message:original",
+            metadata={},
+        )
+    )
+    await repo.create_message(
+        NewOutreachMessage(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            channel="social",
+            lead_id=other_lead.id,
+            status="sent",
+            dedupe_key="author-message:followup",
+            metadata={"followup_of": str(original.id)},
+        )
+    )
+
+    assert (
+        await repo.has_contacted_author(
+            tenant_id, "reddit", "alice", uuid.uuid4()
+        )
+        is True
+    )
+    # The sending message and follow-ups never count.
+    assert (
+        await repo.has_contacted_author(
+            tenant_id, "reddit", "alice", original.id
+        )
+        is False
+    )
+    assert (
+        await repo.has_contacted_author(
+            tenant_id, "reddit", "bob", uuid.uuid4()
+        )
+        is False
+    )
+
+
 async def test_consume_rate_limits_rolls_back_all_checks(repo):
     tenant_id, _ = await _fresh_tenant(repo)
     now = _utc(2020, 7, 1, 12, 0)

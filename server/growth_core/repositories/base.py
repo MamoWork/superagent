@@ -208,6 +208,21 @@ class GrowthRepository(Protocol):
         self, tenant_id: UUID, lead_id: UUID
     ) -> datetime | None: ...
 
+    async def has_contacted_author(
+        self,
+        tenant_id: UUID,
+        platform: str,
+        author_public: str,
+        exclude_message_id: UUID,
+    ) -> bool:
+        """Whether an original message already reached this platform author.
+
+        Only original messages (not follow-ups) whose status is ``sent``,
+        ``replied``, or ``converted`` count. ``exclude_message_id`` lets the
+        caller ignore the message being marked.
+        """
+        ...
+
     # Approval requests ---------------------------------------------------
     async def create_approval_request(
         self, request: NewApprovalRequest

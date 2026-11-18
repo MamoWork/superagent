@@ -22,7 +22,11 @@ from growth_core.services.ratelimit import RateLimitContext, check_send_allowed
 __all__ = ["SendBlocked", "mark_sent"]
 
 #: Original messages may not follow a lead who has already been contacted.
+#: These map to ``ALREADY_CONTACTED``.
 _CONTACTED_STATUSES = frozenset({"sent", "replied", "converted"})
+#: A closed lead may not receive an original message; these map to
+#: ``LEAD_CLOSED`` (the contacted statuses above take precedence).
+_ORIGINAL_CLOSED_STATUSES = frozenset({"suppressed", "rejected"})
 #: Follow-ups are pointless once the lead has replied or been closed.
 _CLOSED_STATUSES = frozenset({"replied", "converted", "suppressed", "rejected"})
 
@@ -72,12 +76,22 @@ async def mark_sent(
     message_id: UUID,
     sent_at: datetime | None = None,
     channel: str = "manual",
+    operator: str | None = None,
     now: datetime | None = None,
 ) -> OutreachMessage:
     """Apply one human-recorded send and schedule the follow-up check.
 
-    The transition is compare-and-set from ``approved``; an over-limit or
-    suppressed message is moved to ``suppressed`` so it never stays approved.
+    The transition is compare-and-set from ``approved``; an over-limit,
+    suppressed, same-author, or closed-lead message is moved to ``suppressed``
+    so it never stays approved.
+
+    Block codes:
+
+    * ``ALREADY_CONTACTED`` — the lead is ``sent``/``replied``/``converted``.
+    * ``LEAD_CLOSED`` — the lead is ``suppressed``/``rejected`` (follow-ups
+      treat every closed status the same way).
+    * ``ALREADY_CONTACTED_USER`` — another original message in this tenant
+      already reached the same ``(platform, author_public)``.
     """
     effective = now or sent_at or datetime.now(timezone.utc)
 
@@ -96,9 +110,12 @@ async def mark_sent(
     meta = message.metadata or {}
     is_followup = "followup_of" in meta
 
-    if not is_followup and lead.status in _CONTACTED_STATUSES:
-        raise SendBlocked("ALREADY_CONTACTED")
-    if is_followup and lead.status in _CLOSED_STATUSES:
+    if not is_followup:
+        if lead.status in _CONTACTED_STATUSES:
+            raise SendBlocked("ALREADY_CONTACTED")
+        if lead.status in _ORIGINAL_CLOSED_STATUSES:
+            raise SendBlocked("LEAD_CLOSED")
+    elif lead.status in _CLOSED_STATUSES:
         raise SendBlocked("LEAD_CLOSED")
 
     if lead.author_public:
@@ -119,13 +136,44 @@ async def mark_sent(
                     tenant_id=tenant_id,
                     workspace_id=workspace_id,
                     actor_type="service",
-                    actor_id=None,
+                    actor_id=operator,
                     action="social.send_suppressed",
                     message_id=message_id,
                     after={"reason": "platform_user"},
                 )
             )
             raise SendBlocked("SUPPRESSED")
+
+    if not is_followup and lead.author_public:
+        already_contacted = await repo.has_contacted_author(
+            tenant_id,
+            lead.platform,
+            lead.author_public,
+            message_id,
+        )
+        if already_contacted:
+            await repo.update_message_status(
+                tenant_id,
+                message_id,
+                expected_status="approved",
+                status="suppressed",
+            )
+            await repo.write_audit(
+                _audit(
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    actor_type="service",
+                    actor_id=operator,
+                    action="social.send_blocked",
+                    message_id=message_id,
+                    after={
+                        "scope": "author",
+                        "platform": lead.platform,
+                        "author_public": lead.author_public,
+                    },
+                )
+            )
+            raise SendBlocked("ALREADY_CONTACTED_USER")
 
     decision = await check_send_allowed(
         repo,
@@ -152,7 +200,7 @@ async def mark_sent(
                 tenant_id=tenant_id,
                 workspace_id=workspace_id,
                 actor_type="service",
-                actor_id=None,
+                actor_id=operator,
                 action="social.send_blocked",
                 message_id=message_id,
                 after={
@@ -222,7 +270,7 @@ async def mark_sent(
             tenant_id=tenant_id,
             workspace_id=workspace_id,
             actor_type="user",
-            actor_id=None,
+            actor_id=operator,
             action="social.sent",
             message_id=message_id,
             after={"channel": channel},

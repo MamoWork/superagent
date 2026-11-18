@@ -27,6 +27,7 @@ from growth_social.services.approval import (
     FeishuAction,
     handle_approval,
     parse_feishu_action,
+    subreddit_allows_links,
 )
 
 CLOCK = datetime(2026, 11, 15, 9, 0, tzinfo=timezone.utc)
@@ -90,7 +91,11 @@ async def _seed_lead(repo, *, subreddit_rules=None) -> SocialLead:
         body="Our welcome sequence feels generic after 200 signups.",
         source_url="https://reddit.example/r/SaaS/post/1",
         subreddit="SaaS",
-        subreddit_rules=subreddit_rules or {},
+        subreddit_rules=(
+            {"self_promotion_allowed": True}
+            if subreddit_rules is None
+            else subreddit_rules
+        ),
         dedupe_key=str(uuid4()),
         status="draft_ready",
         score=91,
@@ -181,6 +186,28 @@ def _signed_headers(body: bytes) -> dict[str, str]:
         "X-Lark-Signature": digest,
         "Content-Type": "application/json",
     }
+
+
+# ---------------------------------------------------------------------------
+# subreddit_allows_links
+# ---------------------------------------------------------------------------
+
+
+async def test_subreddit_rules_fail_closed_when_missing(repo):
+    lead = await _seed_lead(repo, subreddit_rules={})
+    assert subreddit_allows_links(lead) is False
+
+
+async def test_subreddit_rules_allow_only_when_explicitly_true(repo):
+    allowed = await _seed_lead(
+        repo, subreddit_rules={"self_promotion_allowed": True}
+    )
+    denied = await _seed_lead(
+        repo, subreddit_rules={"self_promotion_allowed": False}
+    )
+
+    assert subreddit_allows_links(allowed) is True
+    assert subreddit_allows_links(denied) is False
 
 
 # ---------------------------------------------------------------------------

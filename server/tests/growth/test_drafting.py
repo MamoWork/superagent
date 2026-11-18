@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
@@ -109,6 +109,7 @@ def _make_lead(
         "body": "Our welcome sequence feels generic after 200 signups.",
         "source_url": "https://reddit.example/r/SaaS/post/1",
         "subreddit": "SaaS",
+        "subreddit_rules": {"self_promotion_allowed": True},
         "dedupe_key": str(uuid4()),
         "status": "qualified",
         "score": 91,
@@ -177,6 +178,31 @@ def _outbox_key(approval_id: str) -> str:
 # ---------------------------------------------------------------------------
 # Success path
 # ---------------------------------------------------------------------------
+
+
+async def test_card_uses_platform_publish_time_when_available(repo, now):
+    tenant, workspace = uuid4(), uuid4()
+    published_at = now - timedelta(hours=6)
+    lead = _seed(repo, tenant, workspace, published_at=published_at)
+
+    await _draft(
+        repo,
+        FakeLLM(_valid_draft()),
+        FakeNotifier(),
+        tenant,
+        workspace,
+        lead,
+        _settings(tenant, workspace),
+        now,
+    )
+
+    card = repo.outbox[0].payload["card"]
+    published_element = next(
+        element
+        for element in card["elements"]
+        if element.get("text", {}).get("content", "").startswith("发布时间:")
+    )
+    assert published_at.isoformat() in published_element["text"]["content"]
 
 
 async def test_success_creates_message_version_approval_outbox_card_and_audit(
@@ -255,6 +281,15 @@ async def test_success_creates_message_version_approval_outbox_card_and_audit(
     assert "no_promises" in serialized
     assert expected_url in serialized
     assert "SECRET" not in serialized
+    published_element = next(
+        element
+        for element in card["elements"]
+        if element.get("text", {}).get("content", "").startswith("发布时间:")
+    )
+    assert published_element["text"]["tag"] == "plain_text"
+    # The lead has no platform ``published_at`` in this fixture, so the card
+    # falls back to the lead row's ``created_at``.
+    assert lead.created_at.isoformat() in published_element["text"]["content"]
     assert card["elements"][-1]["text"]["content"].find(expected_url) != -1
     actions = next(
         element for element in card["elements"] if element.get("tag") == "action"
@@ -505,6 +540,26 @@ async def test_explicit_true_subreddit_rule_allows_links(repo, now):
     )
 
     assert message.status == "draft_ready"
+
+
+async def test_missing_subreddit_rules_fail_closed(repo, now):
+    tenant, workspace = uuid4(), uuid4()
+    lead = _seed(repo, tenant, workspace, subreddit_rules={})
+
+    message = await _draft(
+        repo,
+        FakeLLM(_valid_draft()),
+        FakeNotifier(),
+        tenant,
+        workspace,
+        lead,
+        _settings(tenant, workspace),
+        now,
+    )
+
+    assert message.status == "suppressed"
+    assert "SUBREDDIT_NO_LINKS" in message.metadata["policy_violations"]
+    assert repo.outbox == []
 
 
 async def test_llm_policy_violation_is_rejected(repo, now):

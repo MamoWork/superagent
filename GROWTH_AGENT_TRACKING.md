@@ -96,11 +96,11 @@
 | M2-05 | 意图评分（LLM rubric 0–100） | 用户方案 | §3.3 | `growth_social/services/scoring.py` | `test_scoring.py` | ✅ | JSON 输出可解析；广告/同行可识别 |
 | M2-06 | Golden set 校准（50 条标注帖） | 质量 | §3.3 | `tests/growth/golden/social_posts.jsonl`（50 条） | `test_prompt_regression.py::test_golden_set_precision_at_threshold`（precision ≥ 0.8） | ✅ | 阈值 80 时 precision ≥ 0.8 |
 | M2-07 | 回复草稿生成（共情+干货+软提及+1 个官方链接） | 用户方案 | §3.4 | `growth_social/services/drafting.py`; `link_policy.py` | `test_drafting.py`; `test_link_policy.py` | ✅ | 每条带 1 个官方链接；价值先行；披露关联；无夸大/违规承诺 |
-| M2-08 | 飞书审批卡 | 用户方案 | §3.5 | `services/approval.py`; `cards.py`; `growth_core/adapters/feishu.py` | `test_approval.py`; `test_feishu.py`; `test_drafting.py::test_success_creates_message_version_approval_outbox_card_and_audit` | ✅ | v1 飞书；一键打开原帖/复制/通过/拒绝/稍后 |
+| M2-08 | 飞书审批卡 | 用户方案 | §3.5 | `services/approval.py`; `cards.py`; `growth_core/adapters/feishu.py` | `test_approval.py`; `test_feishu.py`; `test_drafting.py::test_success_creates_message_version_approval_outbox_card_and_audit`; `::test_card_uses_platform_publish_time_when_available` | ✅ | v1 飞书；一键打开原帖/复制/通过/拒绝/稍后；卡片含“发布时间”（`published_at`，缺失时回退 `created_at`） |
 | M2-09 | 人工发送跟踪（已发送标记） | 用户方案 | §3.6 | `growth_social/services/sending.py` | `test_sending.py::test_mark_sent_transitions_and_schedules_followup`; `::test_mark_sent_stamps_send_metadata`; `::test_mark_sent_records_delivery_and_audit` | ✅ | 记录 sent_at/channel/draft_version |
-| M2-10 | 跟进提醒（每天最多 1 次，累计最多 3 次） | 用户方案 | §3.6 | `growth_social/services/followup.py` | `test_followup.py` | ✅ | 回复/退订/负反馈后立即停止 |
+| M2-10 | 跟进提醒（每天最多 1 次，累计最多 3 次） | 用户方案 | §3.6 | `growth_social/services/followup.py`; `services/feedback.py`; `api.py`（`POST /internal/v1/social/feedback`） | `test_followup.py`; `test_feedback.py` | ✅ | 回复/退订/负反馈后立即停止；feedback API 写入 replied/suppressed 并加入抑制名单 |
 | M2-11 | 抑制名单 + 频率上限（全局 50/天） | 合规 | §3.7 | `sending.py`; `followup.py`; `growth_core/services/ratelimit.py` | `test_sending.py`; `test_followup.py` | ✅ | 超限/命中抑制时禁止进入发送 |
-| M2-12 | Subreddit 规则检查 | 合规 | §3.7 | `growth_social/services/link_policy.py`; `drafting.py` | `test_link_policy.py::test_no_link_subreddit_marks_manual_only`; `test_drafting.py::test_subreddit_without_links_is_suppressed` | ✅ | 禁自推的板块不生成“可发送”草稿 |
+| M2-12 | Subreddit 规则检查 | 合规 | §3.7 | `growth_social/services/approval.py`（fail-closed）; `link_policy.py`; `drafting.py` | `test_approval.py::test_subreddit_rules_fail_closed_when_missing`; `test_drafting.py::test_missing_subreddit_rules_fail_closed`; `::test_subreddit_without_links_is_suppressed`; `test_link_policy.py::test_no_link_subreddit_marks_manual_only` | ✅ | 未配置/禁自推的板块一律不生成“可发送”草稿（默认 `self_promotion_allowed=false`） |
 | M2-13 | 漏斗指标（发现/合格/通过/发送/回复/转化） | 运维 | §3.8 | 待建 | 待建 | 📝 | 每周自动报表 |
 | M2-14 | 安全测试（广告帖、同行、封号风险） | 质量 | §3.9 | `growth_social/adapters/`（只读 GET） | `test_reddit_adapter.py`; `test_hackernews_adapter.py`; `test_social_e2e.py`; adapters grep | ✅ | 无自动发送代码路径；危险帖被拦截 |
 | M2-15 | E2E（n8n → worker → 审批 → 回调） | 质量 | §3.9 | `growth_social/worker.py`; `handlers.py` | `test_social_e2e.py::test_social_flow_from_post_to_followup` | 🧪 | worker 级链路 post→lead→score→draft→card→approval→sent→follow-up 已验证；n8n 编排属 CORE-11，未实现 |
@@ -243,25 +243,28 @@
 | 2026-11-15 | v0.8 | 完成 Phase 0 + 模块 2 实施计划（24 个任务，TDD 步骤，含迁移、队列/outbox、飞书审批、发送追踪、跟进与验收清单）；计划待评审，尚未开始编码 |
 | 2026-11-19 | v0.9 | 补充 Phase 0/1 实现计划追踪行（PLAN-01）与 runbook / `.env.growth.example`；Phase 0 + 模块 2 状态 🔨（实现中）；完成行待 Task 24 验收后标记 ✅ 并附证据命令 |
 | 2026-11-19 | v1.0 | Task 24 验收通过：Phase 0 + 模块 2 已验证行标记 ✅、部分验证行标记 🧪（CORE-10/14/29、M2-01/15、XC-05）；记录实际命令结果（468/493 backend、424 growth-only、27 integration、22 frontend、compileall、npm run check）与逐项验收映射（§7）；n8n、Vault、llm_usage、告警、配额/开关、熔断、漏斗报表与 X 适配器保持未完成 |
+| 2026-11-19 | v1.1 | 最终修复轮：新增 feedback/unsubscribe API 与审计（M2-10）、ingest/scoring 入队失败恢复、同用户单次联系规则、链接形式识别加固、原始发送关闭状态门禁、subreddit 规则 fail-closed（M2-12）、审批卡发布时间（M2-08）、人工发送 operator 审计；记录修复轮实测 500/526 backend、456 growth-only、28 integration |
 
 ---
 
 ## 7. 验收证据（Task 24，2026-11-19）
 
-环境：本地 Postgres 测试库 `postgresql://postgres@127.0.0.1:55432/growth_test`（superuser，迁移 0001–0004）。以下命令均在退出码 0 的前提下记录。
+环境：本地 Postgres 测试库 `postgresql://postgres@127.0.0.1:55432/growth_test`（superuser，迁移 0001–0005）。以下命令均在退出码 0 的前提下记录。
 
 ### 7.1 命令与结果
 
 | 工作目录 | 命令 | 结果 |
 |---|---|---|
-| `server/` | `python -m pytest -q` | **468 passed, 26 skipped**（exit 0） |
-| `server/` | `GROWTH_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/growth_test python -m pytest -q` | **493 passed, 1 skipped**（exit 0） |
-| `server/` | `python -m pytest tests/growth -q`（不带 DB env） | **424 passed, 26 skipped**（exit 0） |
-| `server/` | `GROWTH_TEST_DATABASE_URL=... python -m pytest tests/growth/test_postgres_integration.py tests/growth/test_repository_postgres.py tests/growth/test_migrations.py tests/growth/test_seed.py -q` | **27 passed**（exit 0） |
+| `server/` | `python -m pytest -q` | **500 passed, 27 skipped**（exit 0） |
+| `server/` | `GROWTH_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/growth_test python -m pytest -q` | **526 passed, 1 skipped**（exit 0） |
+| `server/` | `python -m pytest tests/growth -q`（不带 DB env） | **456 passed, 27 skipped**（exit 0） |
+| `server/` | `GROWTH_TEST_DATABASE_URL=... python -m pytest tests/growth/test_postgres_integration.py tests/growth/test_repository_postgres.py tests/growth/test_migrations.py tests/growth/test_seed.py -q` | **28 passed**（exit 0） |
 | `server/` | `python -m compileall -q app opportunity_core growth_core growth_social` | exit 0 |
 | `web/` | `npm run check`（`tsc --noEmit` + `eslint .` + `vitest run`） | typecheck/lint 通过；**4 test files, 22 tests passed**（exit 0） |
 
-说明：计划 Brief 中的“43 backend tests”是过时数字；本次实测后端为 468（无 DB）/ 493（有 DB）。前端 vitest 实测 22 条。
+说明：计划 Brief 中的“43 backend tests”是过时数字；本次实测后端为 500（无 DB）/ 526（有 DB）。前端 vitest 实测 22 条。
+
+> 2026-11-19 修复轮：新增 feedback 写入路径、ingest/scoring 入队恢复、同作者联系规则、链接识别加固与 fail-closed subreddit 规则；新增迁移 `0005_audit_integration_actor.sql`（审计 actor_type 允许 `integration`）。上表为修复轮后的实测数字。
 
 ### 7.2 验收清单 → 证据映射
 
@@ -270,12 +273,14 @@
 | Ingest Reddit/HN mock → lead 只创建一次、去重生效 | `tests/growth/test_ingest.py::test_duplicates_do_not_enqueue_extra_score_tasks`、`::test_dedupe_key_is_exact_sha256_hex`；`test_postgres_integration.py::test_upsert_lead_dedupes` |
 | 高分 → 建草稿任务；低分 → dropped；watch → 不建草稿 | `test_scoring.py::test_qualified_enqueues_exact_draft_task`、`::test_watch_and_dropped_do_not_enqueue`；阈值定义 `growth_core/seed_data.py:96`（qualified 80 / watch 60） |
 | 草稿恰好 1 个官方链接、UTM、披露；缺链接/多链接被拒 | `test_link_policy.py`（`test_two_links_rejected`、`test_missing_utm_rejected`、`test_missing_disclosure_rejected`、`test_homepage_rejected`、`test_shortener_rejected`）；`test_drafting.py::test_llm_policy_violation_is_rejected`；e2e `_assert_one_official_link` |
-| 飞书卡片含标题、分数、草稿、链接、警告、approve/reject/edit/later | `test_drafting.py::test_success_creates_message_version_approval_outbox_card_and_audit`（断言 title、score 91、risk flags、正文、链接、四个按钮） |
+| 飞书卡片含标题、分数、草稿、链接、警告、发布时间、approve/reject/edit/later | `test_drafting.py::test_success_creates_message_version_approval_outbox_card_and_audit`（断言 title、score 91、risk flags、正文、链接、四个按钮）；`::test_card_uses_platform_publish_time_when_available`（发布时间） |
 | 审批幂等；拒绝留痕；修订生成新版本 | `test_approval.py::test_duplicate_approve_is_idempotent`、`::test_reject_transitions_to_rejected`、`::test_revise_creates_new_version_and_new_approval` |
 | 发送记录 `sent_at`、`channel`、`draft_version`；重复发送被阻止 | `test_sending.py::test_mark_sent_transitions_and_schedules_followup`（sent_at）、`::test_mark_sent_stamps_send_metadata`（channel/draft_version）、`::test_mark_sent_requires_approved_status`（非 approved 拒绝） |
 | 发送时强制全局 50/天、Reddit 5/天、subreddit 2/天 | `test_sending.py::_seed_rules`（50/5/2）及 `::test_mark_sent_blocks_global_daily_limit`、`::test_mark_sent_blocks_reddit_daily_limit`、`::test_mark_sent_blocks_subreddit_link_limit`；`test_postgres_integration.py::test_rate_limit_is_atomic_under_concurrency` |
 | 抑制名单阻止发送与跟进 | `test_sending.py::test_mark_sent_blocks_suppressed_platform_user`；`test_followup.py::test_followup_stops_when_author_is_suppressed` |
-| 跟进每天最多 1 次、累计最多 3 次；回复/负反馈即停 | `test_followup.py::test_followup_reschedules_until_one_day`、`::test_followup_stops_after_three`、`::test_followup_stops_when_lead_replied`、`::test_followup_stops_when_lead_is_closed`（replied/converted/suppressed/rejected） |
+| 跟进每天最多 1 次、累计最多 3 次；回复/负反馈即停 | `test_followup.py::test_followup_reschedules_until_one_day`、`::test_followup_stops_after_three`、`::test_followup_stops_when_lead_replied`、`::test_followup_stops_when_lead_is_closed`（replied/converted/suppressed/rejected）；`test_feedback.py`（replied/suppressed、抑制名单、幂等、404、401） |
+| 同一用户只回复一次；关闭的线索不再原发 | `test_sending.py::test_mark_sent_blocks_second_original_for_same_author`、`::test_mark_sent_allows_followup_for_same_author`、`::test_mark_sent_allows_original_for_different_author`、`::test_mark_sent_blocks_original_when_lead_closed` |
+| 所有链接形式都计入“恰好一条”规则 | `test_link_policy.py::test_alternate_link_forms_are_detected_and_rejected`（大写 scheme / www / 裸域名 / 协议相对）、`::test_file_extension_is_not_a_link`、`::test_duplicate_official_link_is_rejected` |
 | 不存在向 Reddit/HN/任意平台发帖、评论、私信或登录的代码路径 | `growth_social/adapters/reddit.py` 与 `hackernews.py` 仅调用 `client.get`（Reddit `new.json`、HN `search_by_date`）；grep `post/comment/dm/oauth/login` 同时命中 FastAPI 入站路由装饰器（`growth_social/api.py` 的 `@protected_router.post`）与 `growth_core/adapters/feishu.py:173,210` 的飞书卡片出站 POST，但无任何发往 Reddit/HN 的出站写调用；`test_social_e2e.py` 断言 notifier 仅在 `dispatch_outbox` 时被调用（L349–451） |
 | E2E 全链路 | `test_social_e2e.py::test_social_flow_from_post_to_followup`：1 lead → 1 qualified（100）→ 1 draft → 1 card → 1 approval → 1 sent → +24h 1 follow-up |
 | 既有后端/前端测试保持绿色，`npm run check` 不受影响 | 见 §7.1（468/493 backend；22 frontend；exit 0） |

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -25,6 +25,10 @@ from growth_social.services.approval import (
     handle_approval,
     parse_feishu_action,
     subreddit_allows_links,
+)
+from growth_social.services.feedback import (
+    FeedbackLeadNotFound,
+    record_feedback,
 )
 from growth_social.services.link_policy import (
     LinkPolicyConfig,
@@ -48,6 +52,14 @@ class ReviseRequest(BaseModel):
 class MarkSentRequest(BaseModel):
     sent_at: datetime | None = None
     channel: str = "manual"
+    operator: str | None = None
+
+
+class FeedbackRequest(BaseModel):
+    lead_id: UUID
+    kind: Literal["replied", "negative", "unsubscribe", "moderator_warning"]
+    evidence: str = ""
+    source: str = "api"
 
 
 def _clamp_limit(limit: int) -> int:
@@ -115,6 +127,32 @@ async def draft(
         {"lead_id": str(body.lead_id)},
         f"draft:{body.lead_id}",
     )
+
+
+@protected_router.post("/internal/v1/social/feedback")
+async def feedback(
+    body: FeedbackRequest,
+    request: Request,
+    ctx: RequestContext = Depends(get_context),
+) -> dict[str, object]:
+    try:
+        result = await record_feedback(
+            request.app.state.repo,
+            tenant_id=ctx.tenant_id,
+            lead_id=body.lead_id,
+            kind=body.kind,
+            evidence=body.evidence,
+            source=body.source,
+        )
+    except FeedbackLeadNotFound:
+        raise HTTPException(
+            status_code=404, detail={"code": "LEAD_NOT_FOUND"}
+        ) from None
+    return {
+        "lead_id": str(result.lead_id),
+        "status": result.status,
+        "suppressed": result.suppressed,
+    }
 
 
 @protected_router.get("/api/growth/social/leads")
@@ -369,6 +407,7 @@ async def mark_message_sent(
 ) -> dict[str, object]:
     channel = body.channel if body is not None and body.channel else "manual"
     sent_at = body.sent_at if body is not None else None
+    operator = body.operator if body is not None else None
     try:
         message = await mark_sent(
             request.app.state.repo,
@@ -377,6 +416,7 @@ async def mark_message_sent(
             message_id=message_id,
             sent_at=sent_at,
             channel=channel,
+            operator=operator,
         )
     except SendBlocked as exc:
         status_code = 404 if exc.code == "NOT_FOUND" else 409

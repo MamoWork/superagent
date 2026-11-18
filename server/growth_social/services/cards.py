@@ -73,6 +73,12 @@ def build_approval_card(
     by ``approval_id`` and needs no other message field.
     """
     community = lead.subreddit or lead.platform
+    # ``published_at`` is the platform post time; fall back to the lead row's
+    # creation time when the source did not provide one.
+    published = lead.published_at or lead.created_at
+    published_label = (
+        published.isoformat() if published is not None else "unknown"
+    )
     risk_flags = ", ".join(version.risk_flags) or "none"
     subreddit_result = (
         "links not allowed (manual only)"
@@ -84,6 +90,7 @@ def build_approval_card(
 
     elements: list[dict[str, Any]] = [
         _div(f"Platform: {lead.platform}\nCommunity: {community}"),
+        _div(f"发布时间: {published_label}"),
         _div(f"Post: {lead.title}\nSource: {lead.source_url}"),
         _div(f"Score: {score.score}\nWhy: {summary}"),
         _div(

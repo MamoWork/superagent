@@ -366,6 +366,16 @@ async def test_mark_sent_blocks_original_when_lead_already_contacted(repo):
         await _send(repo, message)
 
 
+@pytest.mark.parametrize("status", ["suppressed", "rejected"])
+async def test_mark_sent_blocks_original_when_lead_closed(repo, status):
+    _seed_rules(repo)
+    lead = _seed_lead(repo, status=status)
+    message = _seed_message(repo, lead)
+
+    with pytest.raises(SendBlocked, match="LEAD_CLOSED"):
+        await _send(repo, message)
+
+
 async def test_mark_sent_blocks_followup_when_lead_closed(repo):
     _seed_rules(repo)
     lead = _seed_lead(repo, status="converted")
@@ -392,6 +402,67 @@ async def test_mark_sent_allows_followup_while_lead_is_sent(repo):
     tasks = repo.tasks_for(f"followup:{original_id}")
     assert len(tasks) == 1
     assert tasks[0].idempotency_key == f"followup:{original_id}:{message.id}"
+
+
+async def test_mark_sent_blocks_second_original_for_same_author(repo):
+    _seed_rules(repo)
+    first_lead = _seed_lead(repo)
+    first_message = _seed_message(repo, first_lead)
+    await _seed_version(repo, first_message)
+    await _send(repo, first_message)
+
+    second_lead = _seed_lead(repo)
+    second_message = _seed_message(repo, second_lead)
+
+    with pytest.raises(SendBlocked, match="ALREADY_CONTACTED_USER"):
+        await _send(repo, second_message)
+
+    stored = await repo.get_message(TENANT, second_message.id)
+    assert stored.status == "suppressed"
+    blocked = [
+        entry
+        for entry in repo.audit
+        if entry["action"] == "social.send_blocked"
+        and entry["after"].get("scope") == "author"
+    ]
+    assert len(blocked) == 1
+    assert blocked[0]["entity_id"] == second_message.id
+
+
+async def test_mark_sent_allows_followup_for_same_author(repo):
+    _seed_rules(repo)
+    first_lead = _seed_lead(repo)
+    first_message = _seed_message(repo, first_lead)
+    await _seed_version(repo, first_message)
+    await _send(repo, first_message)
+
+    second_lead = _seed_lead(repo)
+    followup = _seed_message(
+        repo,
+        second_lead,
+        metadata={"followup_of": str(first_message.id)},
+    )
+    await _seed_version(repo, followup)
+
+    updated = await _send(repo, followup)
+
+    assert updated.status == "sent"
+
+
+async def test_mark_sent_allows_original_for_different_author(repo):
+    _seed_rules(repo)
+    first_lead = _seed_lead(repo)
+    first_message = _seed_message(repo, first_lead)
+    await _seed_version(repo, first_message)
+    await _send(repo, first_message)
+
+    other_lead = _seed_lead(repo, author_public="bob")
+    other_message = _seed_message(repo, other_lead)
+    await _seed_version(repo, other_message)
+
+    updated = await _send(repo, other_message)
+
+    assert updated.status == "sent"
 
 
 async def test_mark_sent_raises_concurrent_update(repo, monkeypatch):
@@ -523,7 +594,11 @@ def test_api_mark_sent_happy_path(repo):
 
     response = _client(repo).post(
         f"/api/growth/social/messages/{message.id}/sent",
-        json={"sent_at": CLOCK.isoformat(), "channel": "manual"},
+        json={
+            "sent_at": CLOCK.isoformat(),
+            "channel": "manual",
+            "operator": "operator-1",
+        },
         headers={"X-Service-Token": SERVICE_TOKEN},
     )
 
@@ -533,6 +608,36 @@ def test_api_mark_sent_happy_path(repo):
     assert body["status"] == "sent"
     assert body["channel"] == "manual"
     assert datetime.fromisoformat(body["sent_at"]) == CLOCK
+    sent_audits = [
+        entry for entry in repo.audit if entry["action"] == "social.sent"
+    ]
+    assert len(sent_audits) == 1
+    assert sent_audits[0]["actor_type"] == "user"
+    assert sent_audits[0]["actor_id"] == "operator-1"
+
+
+def test_api_mark_sent_operator_defaults_to_none(repo):
+    _seed_rules(repo)
+
+    async def seed():
+        lead = _seed_lead(repo)
+        message = _seed_message(repo, lead)
+        await _seed_version(repo, message)
+        return message
+
+    message = _run(seed())
+
+    response = _client(repo).post(
+        f"/api/growth/social/messages/{message.id}/sent",
+        json={},
+        headers={"X-Service-Token": SERVICE_TOKEN},
+    )
+
+    assert response.status_code == 200
+    sent_audits = [
+        entry for entry in repo.audit if entry["action"] == "social.sent"
+    ]
+    assert sent_audits[0]["actor_id"] is None
 
 
 def test_api_mark_sent_invalid_transition(repo):

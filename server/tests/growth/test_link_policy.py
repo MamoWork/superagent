@@ -105,13 +105,60 @@ def test_two_links_rejected():
     assert result.link_url is None
 
 
-def test_scheme_less_link_is_no_link():
+def test_scheme_less_link_is_detected_and_rejected():
     text = "I built Example. See www.example.com/guides/churn"
 
     result = validate_link_policy(text, CFG)
 
     assert result.ok is False
-    assert "NO_LINK" in result.violations
+    assert "INVALID_URL" in result.violations
+    assert result.link_url == "www.example.com/guides/churn"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("I built Example. See HTTPS://evil.example/x", "WRONG_DOMAIN"),
+        ("I built Example. See www.bit.ly/abc", "SHORTENER"),
+        ("I built Example. See bit.ly/abc", "SHORTENER"),
+        ("I built Example. See //evil.example/x", "INVALID_URL"),
+        ("I built Example. See example.com/x", "INVALID_URL"),
+    ],
+    ids=[
+        "uppercase-scheme",
+        "www-shortener",
+        "bare-shortener",
+        "protocol-relative",
+        "bare-domain",
+    ],
+)
+def test_alternate_link_forms_are_detected_and_rejected(text, expected):
+    result = validate_link_policy(text, CFG)
+
+    assert result.ok is False
+    assert expected in result.violations
+
+
+def test_file_extension_is_not_a_link():
+    text = (
+        "I built Example. Node.js users often hit this wall; "
+        f"this checklist helps: https://example.com/guides/churn?{_VALID_QUERY}"
+    )
+
+    result = validate_link_policy(text, CFG)
+
+    assert result.ok is True
+    assert result.link_url == f"https://example.com/guides/churn?{_VALID_QUERY}"
+
+
+def test_duplicate_official_link_is_rejected():
+    url = f"https://example.com/guides/churn?{_VALID_QUERY}"
+    text = f"I built Example. {url} and again {url}"
+
+    result = validate_link_policy(text, CFG)
+
+    assert result.ok is False
+    assert "MULTIPLE_LINKS" in result.violations
     assert result.link_url is None
 
 

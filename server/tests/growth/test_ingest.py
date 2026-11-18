@@ -6,6 +6,8 @@ import hashlib
 from datetime import timedelta
 from uuid import UUID, uuid4
 
+import pytest
+
 from growth_core.adapters.base import (
     ProviderAuthError,
     ProviderUnavailable,
@@ -346,6 +348,90 @@ async def test_duplicates_do_not_enqueue_extra_score_tasks(repo, now):
     assert result.duplicates == 2
     assert len(repo.leads) == 1
     assert len(repo.tasks) == 1
+
+
+async def test_duplicate_unscored_lead_reenqueues_score(repo, now):
+    tenant_id, workspace_id = uuid4(), uuid4()
+    await repo.add_source(_source(tenant_id=tenant_id, workspace_id=workspace_id))
+    post = _post()
+
+    await ingest_social(
+        repo,
+        {"reddit": FakeReddit([post])},
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        now=now,
+    )
+    lead = repo.leads[0]
+    assert lead.score is None
+    # Simulate a lost first enqueue: the lead exists but no score task does.
+    repo.tasks.clear()
+
+    result = await ingest_social(
+        repo,
+        {"reddit": FakeReddit([post])},
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        now=now,
+    )
+
+    assert result.created == 0
+    assert result.duplicates == 1
+    tasks = repo.tasks_for(f"score:{lead.id}")
+    assert len(tasks) == 1
+    assert tasks[0].task_type == "social.score"
+    assert tasks[0].idempotency_key == f"score:{lead.id}"
+
+
+async def test_duplicate_scored_lead_does_not_reenqueue_score(repo, now):
+    tenant_id, workspace_id = uuid4(), uuid4()
+    await repo.add_source(_source(tenant_id=tenant_id, workspace_id=workspace_id))
+    post = _post()
+
+    await ingest_social(
+        repo,
+        {"reddit": FakeReddit([post])},
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        now=now,
+    )
+    repo.leads[0].score = 91
+    repo.tasks.clear()
+
+    await ingest_social(
+        repo,
+        {"reddit": FakeReddit([post])},
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        now=now,
+    )
+
+    assert repo.tasks == []
+
+
+class FailingEnqueueRepository(FakeGrowthRepository):
+    """Repository whose task queue is unavailable."""
+
+    async def enqueue_task(self, task):
+        raise RuntimeError("queue unavailable")
+
+
+async def test_created_path_enqueue_failure_propagates(now):
+    repo = FailingEnqueueRepository()
+    tenant_id, workspace_id = uuid4(), uuid4()
+    await repo.add_source(_source(tenant_id=tenant_id, workspace_id=workspace_id))
+
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        await ingest_social(
+            repo,
+            {"reddit": FakeReddit([_post()])},
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            now=now,
+        )
+
+    # The lead was persisted; the retry will take the duplicate path.
+    assert len(repo.leads) == 1
 
 
 async def test_score_task_carries_tenant_workspace_and_payload(repo, now):

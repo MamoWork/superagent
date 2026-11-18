@@ -96,14 +96,16 @@ values
   ('00000000-0000-0000-0000-000000000001',
    '00000000-0000-0000-0000-000000000002',
    'reddit', 'reddit', 'reddit:r/SaaS',
-   '{"subreddit":"SaaS","keywords":["saas","founder"],"limit":25}', 30),
+   '{"subreddit":"SaaS","keywords":["saas","founder"],"limit":25,"subreddit_rules":{"self_promotion_allowed":true}}', 30),
   ('00000000-0000-0000-0000-000000000001',
    '00000000-0000-0000-0000-000000000002',
    'hackernews', 'hackernews', 'hn:saas-founder',
-   '{"query":"saas founder","limit":25}', 30)
+   '{"query":"saas founder","limit":25,"subreddit_rules":{"self_promotion_allowed":true}}', 30)
 on conflict (tenant_id, dedupe_key) do nothing;
 SQL
 ```
+
+`subreddit_rules.self_promotion_allowed` **默认关闭（fail-closed）**：来源配置缺少 `subreddit_rules`，或规则对象缺少 `self_promotion_allowed: true` 时，该来源的所有线索都会被视为“禁止自推”。此时草稿会被标记为 `suppressed` / `manual_only`，不会生成飞书审批卡，也不会进入发送流程。因此每个启用链接回复的来源（包括没有 subreddit 概念的 Hacker News）都必须在 `config` 中显式写入该字段；只有确认该社区允许自推时才设为 `true`。
 
 `cadence_minutes` 只是记录值；实际每 30 分钟触发由 n8n 负责（见 §4）。
 

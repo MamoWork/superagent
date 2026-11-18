@@ -867,6 +867,33 @@ class FakeGrowthRepository:
         ]
         return max(sent) if sent else None
 
+    async def has_contacted_author(
+        self,
+        tenant_id: UUID,
+        platform: str,
+        author_public: str,
+        exclude_message_id: UUID,
+    ) -> bool:
+        for message in self.messages:
+            if message.tenant_id != tenant_id:
+                continue
+            if message.id == exclude_message_id:
+                continue
+            if message.status not in ("sent", "replied", "converted"):
+                continue
+            if "followup_of" in (message.metadata or {}):
+                continue
+            if message.lead_id is None:
+                continue
+            lead = self._find_lead(tenant_id, message.lead_id)
+            if (
+                lead is not None
+                and lead.platform == platform
+                and lead.author_public == author_public
+            ):
+                return True
+        return False
+
     # ------------------------------------------------------------------
     # Approval requests
     # ------------------------------------------------------------------

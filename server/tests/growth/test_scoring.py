@@ -508,7 +508,25 @@ async def test_already_scored_lead_short_circuits(repo, now):
     assert result.penalties == []
     assert result.summary == ""
     assert llm.calls == []
-    assert repo.tasks == []
+    # A qualified lead always has a draft task (re-enqueued idempotently).
+    tasks = repo.tasks_for(f"draft:{lead.id}")
+    assert len(tasks) == 1
+    assert tasks[0].task_type == "social.draft"
+
+
+async def test_rescoring_qualified_lead_reenqueues_draft_idempotently(repo, now):
+    tenant, workspace = uuid4(), uuid4()
+    _seed_config(repo, tenant)
+    lead = _add_lead(repo, tenant, workspace, status="qualified", score=81)
+    llm = FakeLLM(exc=AssertionError("LLM must not be called"))
+
+    await score_lead(repo, llm, tenant_id=tenant, lead_id=lead.id, now=now)
+    await score_lead(repo, llm, tenant_id=tenant, lead_id=lead.id, now=now)
+
+    tasks = repo.tasks_for(f"draft:{lead.id}")
+    assert len(tasks) == 1
+    assert tasks[0].idempotency_key == f"draft:{lead.id}"
+    assert llm.calls == []
 
 
 async def test_already_scored_lead_normalizes_unknown_status(repo, now):
