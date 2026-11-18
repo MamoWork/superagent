@@ -11,6 +11,7 @@ __all__ = [
     "IntentPenaltyDraft",
     "IntentScoreDraft",
     "IntentScore",
+    "ReplyDraft",
 ]
 
 
@@ -50,3 +51,16 @@ class IntentScore(BaseModel):
     dimensions: list[IntentDimensionDraft]
     penalties: list[IntentPenaltyDraft]
     summary: str = ""
+
+
+class ReplyDraft(BaseModel):
+    """Raw model output for a proposed reply.
+
+    The server owns the ``{{LINK}}`` policy: a draft must contain exactly one
+    placeholder, but that is checked by the drafting service rather than here
+    so a policy failure becomes a recorded rejection, not an LLM error.
+    """
+
+    body_markdown: str
+    link_path: str
+    risk_flags: list[str] = Field(default_factory=list)
