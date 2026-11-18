@@ -21,17 +21,27 @@ from growth_social.api import router as social_router
 def create_social_app(
     *,
     settings: GrowthSettings,
-    repo: GrowthRepository,
+    repo: GrowthRepository | None = None,
     adapters: Any | None = None,
     notifier: Any | None = None,
     llm: Any | None = None,
+    lifespan: Any | None = None,
 ) -> FastAPI:
     """Build the social API app and store its dependencies on ``app.state``.
 
-    ``adapters``, ``notifier``, and ``llm`` are forward-compatible runtime
-    dependencies; their concrete protocol types arrive in later tasks.
+    ``repo`` is optional because the Postgres pool cannot be created at import
+    time: ``growth_social.asgi`` connects inside the passed ``lifespan`` and
+    writes the live dependencies onto ``app.state`` before serving. OpenAPI
+    documents are disabled; this is an internal service.
     """
-    app = FastAPI(title="Growth Agent Social API", version="0.1.0")
+    app = FastAPI(
+        title="Growth Agent Social API",
+        version="0.1.0",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+    )
     app.state.settings = settings
     app.state.repo = repo
     app.state.adapters = adapters
@@ -41,3 +51,9 @@ def create_social_app(
     app.include_router(core.router)
     app.include_router(social_router)
     return app
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("growth_social.asgi:app", host="0.0.0.0", port=8780)
