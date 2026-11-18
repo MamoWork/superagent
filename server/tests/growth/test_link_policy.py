@@ -142,6 +142,7 @@ def test_alternate_link_forms_are_detected_and_rejected(text, expected):
 def test_file_extension_is_not_a_link():
     text = (
         "I built Example. Node.js users often hit this wall; "
+        "package.json/config stays untouched; "
         f"this checklist helps: https://example.com/guides/churn?{_VALID_QUERY}"
     )
 
@@ -149,6 +150,20 @@ def test_file_extension_is_not_a_link():
 
     assert result.ok is True
     assert result.link_url == f"https://example.com/guides/churn?{_VALID_QUERY}"
+
+
+@pytest.mark.parametrize("extra", ["acme.io", "evil.com?x=1"])
+def test_bare_domain_without_a_path_is_counted(extra):
+    text = (
+        "I built Example. See "
+        f"https://example.com/guides/churn?{_VALID_QUERY} and {extra}"
+    )
+
+    result = validate_link_policy(text, CFG)
+
+    assert result.ok is False
+    assert "MULTIPLE_LINKS" in result.violations
+    assert result.link_url is None
 
 
 def test_duplicate_official_link_is_rejected():

@@ -18,6 +18,7 @@ from growth_core.schemas import (
     OutreachMessage,
 )
 from growth_core.services.ratelimit import RateLimitContext, check_send_allowed
+from growth_social.services.author import is_contactable_author
 
 __all__ = ["SendBlocked", "mark_sent"]
 
@@ -118,7 +119,7 @@ async def mark_sent(
     elif lead.status in _CLOSED_STATUSES:
         raise SendBlocked("LEAD_CLOSED")
 
-    if lead.author_public:
+    if is_contactable_author(lead.author_public):
         suppressed = await repo.is_suppressed(
             tenant_id,
             "platform_user",
@@ -144,7 +145,7 @@ async def mark_sent(
             )
             raise SendBlocked("SUPPRESSED")
 
-    if not is_followup and lead.author_public:
+    if not is_followup and is_contactable_author(lead.author_public):
         already_contacted = await repo.has_contacted_author(
             tenant_id,
             lead.platform,

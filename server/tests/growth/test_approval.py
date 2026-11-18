@@ -205,9 +205,18 @@ async def test_subreddit_rules_allow_only_when_explicitly_true(repo):
     denied = await _seed_lead(
         repo, subreddit_rules={"self_promotion_allowed": False}
     )
+    string_false = await _seed_lead(
+        repo, subreddit_rules={"self_promotion_allowed": "false"}
+    )
+    string_true = await _seed_lead(
+        repo, subreddit_rules={"self_promotion_allowed": "true"}
+    )
 
     assert subreddit_allows_links(allowed) is True
     assert subreddit_allows_links(denied) is False
+    assert subreddit_allows_links(string_false) is False
+    # Only the JSON boolean is accepted; strings fail closed too.
+    assert subreddit_allows_links(string_true) is False
 
 
 # ---------------------------------------------------------------------------

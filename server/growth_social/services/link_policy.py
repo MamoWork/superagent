@@ -52,16 +52,41 @@ _DISCLOSURE_PHRASES = (
 )
 
 _UTM_KEYS = frozenset({"utm_source", "utm_medium", "utm_campaign"})
+#: Bare tokens whose final host label is a common file extension are file
+#: names, not links. Everything else fails closed as a possible link.
+_IGNORED_FILE_SUFFIXES = frozenset(
+    {
+        "js",
+        "jsx",
+        "json",
+        "ts",
+        "tsx",
+        "md",
+        "py",
+        "html",
+        "css",
+        "yml",
+        "yaml",
+        "sql",
+        "sh",
+        "rb",
+        "go",
+        "rs",
+        "java",
+        "txt",
+    }
+)
 # Order matters: the scheme/protocol-relative and ``www.`` forms are matched
 # first so the bare-domain branch never double-counts a URL inside them. A
-# bare domain must carry a path (``example.com/x``); that keeps file names such
-# as ``node.js`` from being mistaken for links.
+# bare domain may have no path at all (``acme.io``) or only a query
+# (``evil.com?x=1``); the file-extension denylist below removes obvious file
+# names such as ``node.js`` without opening a path-only bypass.
 _URL_PATTERN = re.compile(
     r"(?P<scheme>(?:https?:)?//[^\s<>\[\]\"'`)]+)"
     r"|(?P<www>www\.[^\s<>\[\]\"'`)]+)"
     r"|(?P<domain>(?<![\w@./-])"
     r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}"
-    r"(?::\d+)?/[^\s<>\[\]\"'`)]*)",
+    r"(?::\d+)?(?:[/?][^\s<>\[\]\"'`)]*)?)",
     re.IGNORECASE,
 )
 _TRAILING_PUNCTUATION = ".,;:!?'\""
@@ -87,19 +112,31 @@ class LinkPolicyResult:
     manual_only: bool = False
 
 
+def _is_ignored_file_token(token: str) -> bool:
+    """Whether a bare-domain token looks like ``name.ext`` or ``name.ext/x``."""
+    host_part = re.split(r"[/?#]", token, maxsplit=1)[0]
+    host_part = host_part.split(":", 1)[0]
+    suffix = host_part.rsplit(".", 1)[-1].lower()
+    return suffix in _IGNORED_FILE_SUFFIXES
+
+
 def _extract_urls(text: str) -> list[tuple[str, int]]:
     """Return ``(cleaned_url, start_offset)`` for each URL token in ``text``.
 
     Detects explicit ``http(s)://`` links (any case), protocol-relative
-    ``//host`` links, ``www.`` prefixed links, and bare domains with a path.
-    Each token is counted once: markdown links and autolinks contribute only
-    the URL inside them.
+    ``//host`` links, ``www.`` prefixed links, and bare domains with an
+    optional path or query. Each token is counted once: markdown links and
+    autolinks contribute only the URL inside them, and bare file names with a
+    known source-code/data suffix are ignored.
     """
     found: list[tuple[str, int]] = []
     for match in _URL_PATTERN.finditer(text):
         cleaned = match.group(0).rstrip(_TRAILING_PUNCTUATION)
-        if cleaned:
-            found.append((cleaned, match.start()))
+        if not cleaned:
+            continue
+        if match.lastgroup == "domain" and _is_ignored_file_token(cleaned):
+            continue
+        found.append((cleaned, match.start()))
     return found
 
 

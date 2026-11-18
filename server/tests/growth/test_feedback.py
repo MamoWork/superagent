@@ -99,10 +99,8 @@ async def test_replied_marks_lead_replied_and_audits(repo):
     assert result.suppressed is False
     stored = await repo.get_lead(TENANT, lead.id)
     assert stored.status == "replied"
-    # A public author is suppressed for future outreach even on a reply.
-    assert await repo.is_suppressed(
-        TENANT, "platform_user", f"{lead.platform}:{lead.author_public}"
-    )
+    # A reply changes the lead status but does not suppress the author.
+    assert repo.suppressions == {}
     audits = [a for a in repo.audit if a["action"] == "social.feedback"]
     assert len(audits) == 1
     entry = audits[0]
@@ -119,9 +117,16 @@ async def test_replied_marks_lead_replied_and_audits(repo):
 
 
 @pytest.mark.parametrize(
-    "kind", ["negative", "unsubscribe", "moderator_warning"]
+    ("kind", "expected_reason"),
+    [
+        ("negative", "negative_reply"),
+        ("unsubscribe", "unsubscribe"),
+        ("moderator_warning", "moderator_warning"),
+    ],
 )
-async def test_negative_kinds_suppress_lead_and_author(repo, kind):
+async def test_negative_kinds_suppress_lead_and_author(
+    repo, kind, expected_reason
+):
     lead = _seed_lead(repo)
 
     result = await _feedback(repo, lead, kind=kind, source="user")
@@ -133,6 +138,9 @@ async def test_negative_kinds_suppress_lead_and_author(repo, kind):
     assert await repo.is_suppressed(
         TENANT, "platform_user", f"{lead.platform}:{lead.author_public}"
     )
+    assert repo.suppressions[
+        (TENANT, "platform_user", f"{lead.platform}:{lead.author_public}")
+    ][0] == expected_reason
     audits = [a for a in repo.audit if a["action"] == "social.feedback"]
     assert len(audits) == 1
     assert audits[0]["actor_type"] == "user"
@@ -149,7 +157,18 @@ async def test_private_author_is_not_added_to_suppression_list(repo):
     assert repo.suppressions == {}
 
 
-async def test_repeated_feedback_is_idempotent(repo):
+@pytest.mark.parametrize("author_public", ["", "  ", "[deleted]"])
+async def test_deleted_author_is_not_added_to_suppression_list(
+    repo, author_public
+):
+    lead = _seed_lead(repo, author_public=author_public)
+
+    await _feedback(repo, lead, kind="unsubscribe")
+
+    assert repo.suppressions == {}
+
+
+async def test_repeated_feedback_is_idempotent_and_audits_each_call(repo):
     lead = _seed_lead(repo)
 
     first = await _feedback(repo, lead, kind="negative")
@@ -158,7 +177,71 @@ async def test_repeated_feedback_is_idempotent(repo):
     assert (first.status, second.status) == ("suppressed", "suppressed")
     assert (first.suppressed, second.suppressed) == (True, True)
     assert len(repo.suppressions) == 1
+    # Every genuine feedback call is audited, including repeats.
+    assert len([a for a in repo.audit if a["action"] == "social.feedback"]) == 2
+
+
+@pytest.mark.parametrize("kind", ["replied", "negative", "unsubscribe"])
+async def test_converted_lead_is_not_downgraded_but_is_audited(repo, kind):
+    lead = _seed_lead(repo, status="converted")
+
+    result = await _feedback(repo, lead, kind=kind)
+
+    assert result.status == "converted"
+    assert result.suppressed is False
+    stored = await repo.get_lead(TENANT, lead.id)
+    assert stored.status == "converted"
+    audits = [a for a in repo.audit if a["action"] == "social.feedback"]
+    assert len(audits) == 1
+    assert audits[0]["after"]["status"] == "converted"
+    assert audits[0]["after"]["suppressed"] is False
+
+
+async def test_lost_cas_reloads_and_retries(repo, monkeypatch):
+    lead = _seed_lead(repo)
+    original = repo.update_lead_status
+    calls = 0
+
+    async def first_attempt_lost(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # Simulate a concurrent writer moving the lead before our CAS.
+            lead.status = "watch"
+            return False
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(repo, "update_lead_status", first_attempt_lost)
+
+    result = await _feedback(repo, lead, kind="negative")
+
+    assert calls == 2
+    assert result.status == "suppressed"
+    stored = await repo.get_lead(TENANT, lead.id)
+    assert stored.status == "suppressed"
     assert len([a for a in repo.audit if a["action"] == "social.feedback"]) == 1
+
+
+async def test_cas_retry_is_bounded_and_still_audits(repo, monkeypatch):
+    lead = _seed_lead(repo)
+    calls = 0
+
+    async def always_lost(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return False
+
+    monkeypatch.setattr(repo, "update_lead_status", always_lost)
+
+    result = await _feedback(repo, lead, kind="negative")
+
+    assert calls == 3
+    assert result.status == "qualified"
+    stored = await repo.get_lead(TENANT, lead.id)
+    assert stored.status == "qualified"
+    audits = [a for a in repo.audit if a["action"] == "social.feedback"]
+    assert len(audits) == 1
+    assert audits[0]["after"]["status"] == "qualified"
 
 
 async def test_unknown_lead_raises(repo):

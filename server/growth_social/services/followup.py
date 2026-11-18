@@ -31,6 +31,7 @@ from growth_core.repositories.base import GrowthRepository
 from growth_core.schemas import NewTask, OutreachMessage, SocialLead
 from growth_social.schemas import ReplyDraft
 from growth_social.services.approval import ensure_approval_and_enqueue_card
+from growth_social.services.author import is_contactable_author
 from growth_social.services.draft_flow import (
     PLACEHOLDER_COUNT,
     create_draft_with_approval,
@@ -137,7 +138,7 @@ async def process_followup_check(
         return None
     if lead.status in _CLOSED_LEAD_STATUSES:
         return None
-    if lead.author_public:
+    if is_contactable_author(lead.author_public):
         suppressed = await repo.is_suppressed(
             tenant_id,
             "platform_user",

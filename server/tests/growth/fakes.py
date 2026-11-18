@@ -125,6 +125,20 @@ def _feature_enabled(value: Any) -> bool:
     return bool(getattr(value, "enabled", value))
 
 
+#: Mirrors the ``suppression_list.reason`` CHECK in ``0002_social.sql`` so unit
+#: tests catch invalid reasons that Postgres would reject.
+_ALLOWED_SUPPRESSION_REASONS = frozenset(
+    {
+        "unsubscribe",
+        "hard_bounce",
+        "complaint",
+        "manual",
+        "negative_reply",
+        "moderator_warning",
+    }
+)
+
+
 class FakeGrowthRepository:
     """``GrowthRepository`` backed by dicts and lists."""
 
@@ -490,6 +504,8 @@ class FakeGrowthRepository:
         reason: str,
         source: str = "",
     ) -> None:
+        if reason not in _ALLOWED_SUPPRESSION_REASONS:
+            raise ValueError(f"invalid suppression reason: {reason}")
         self.suppressions.setdefault((tenant_id, kind, value), (reason, source))
 
     async def write_audit(self, entry: NewAuditEntry) -> None:

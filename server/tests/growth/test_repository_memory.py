@@ -395,12 +395,12 @@ async def test_returned_models_do_not_alias_store(repo):
 async def test_suppression_stores_reason_and_source(repo):
     tenant_id = uuid4()
     await repo.add_suppression(
-        tenant_id, "email", "a@example.test", "bounce", source="webhook"
+        tenant_id, "email", "a@example.test", "hard_bounce", source="webhook"
     )
 
     assert await repo.is_suppressed(tenant_id, "email", "a@example.test")
     assert repo.suppressions[(tenant_id, "email", "a@example.test")] == (
-        "bounce",
+        "hard_bounce",
         "webhook",
     )
 

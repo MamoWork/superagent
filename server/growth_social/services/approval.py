@@ -93,9 +93,10 @@ def subreddit_allows_links(lead: SocialLead) -> bool:
 
     Fail closed: a missing ``self_promotion_allowed`` key defaults to *not*
     allowed, so an unconfigured subreddit can never produce a sendable draft.
-    ``None``, ``0``, ``""`` and ``False`` are also treated as not allowed.
+    Only the JSON boolean ``true`` allows links; ``None``, ``0``, ``""``,
+    ``False`` and non-boolean strings (including ``"false"``) are denied.
     """
-    return bool(lead.subreddit_rules.get("self_promotion_allowed", False))
+    return lead.subreddit_rules.get("self_promotion_allowed") is True
 
 
 async def ensure_approval_and_enqueue_card(

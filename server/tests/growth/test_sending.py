@@ -465,6 +465,40 @@ async def test_mark_sent_allows_original_for_different_author(repo):
     assert updated.status == "sent"
 
 
+@pytest.mark.parametrize("author_public", ["[deleted]", ""])
+async def test_mark_sent_skips_same_author_check_for_deleted_users(
+    repo, author_public
+):
+    _seed_rules(repo)
+    first_lead = _seed_lead(repo, author_public=author_public)
+    first_message = _seed_message(repo, first_lead)
+    await _seed_version(repo, first_message)
+    await _send(repo, first_message)
+
+    # All deleted users share this value, so it must not block another lead.
+    second_lead = _seed_lead(repo, author_public=author_public)
+    second_message = _seed_message(repo, second_lead)
+    await _seed_version(repo, second_message)
+
+    updated = await _send(repo, second_message)
+
+    assert updated.status == "sent"
+
+
+async def test_mark_sent_ignores_suppression_keyed_on_deleted_author(repo):
+    _seed_rules(repo)
+    lead = _seed_lead(repo, author_public="[deleted]")
+    message = _seed_message(repo, lead)
+    await _seed_version(repo, message)
+    await repo.add_suppression(
+        TENANT, "platform_user", f"{lead.platform}:{lead.author_public}", "manual"
+    )
+
+    updated = await _send(repo, message)
+
+    assert updated.status == "sent"
+
+
 async def test_mark_sent_raises_concurrent_update(repo, monkeypatch):
     _seed_rules(repo)
     lead = _seed_lead(repo)

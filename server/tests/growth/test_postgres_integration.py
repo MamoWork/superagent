@@ -25,6 +25,7 @@ from growth_core.schemas import (
     NewTask,
     RateLimitCheck,
 )
+from growth_social.services.feedback import record_feedback
 
 pytestmark = pytest.mark.integration
 
@@ -484,3 +485,80 @@ async def test_config_rollback_restores_snapshot(pg_repo, now):
     }
     assert rollback_row["changed_by"] == "operator"
     assert json.loads(rollback_row["snapshot"])["template"] == "old system"
+
+
+@pytest.mark.skipif(
+    not os.getenv("GROWTH_TEST_DATABASE_URL"), reason="no test DB"
+)
+async def test_feedback_postgres_all_kinds_suppression_and_audit(pg_repo):
+    tenant_id, workspace_id = await _ensure_tenant(pg_repo)
+    cases = (
+        ("replied", "replied", None),
+        ("negative", "suppressed", "negative_reply"),
+        ("unsubscribe", "suppressed", "unsubscribe"),
+        ("moderator_warning", "suppressed", "moderator_warning"),
+    )
+
+    for kind, expected_status, expected_reason in cases:
+        author = f"author-{kind}"
+        lead, created = await pg_repo.upsert_lead(
+            NewSocialLead(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                platform="reddit",
+                platform_post_id=f"feedback-{kind}",
+                title="How do you keep onboarding emails personal?",
+                body="Our welcome sequence feels generic.",
+                author_public=author,
+                source_url=f"https://reddit.example/r/SaaS/post/{kind}",
+                dedupe_key=f"feedback-lead-{kind}",
+            )
+        )
+        assert created is True
+
+        result = await record_feedback(
+            pg_repo,
+            tenant_id=tenant_id,
+            lead_id=lead.id,
+            kind=kind,
+            evidence=f"{kind} evidence",
+            source="webhook",
+        )
+
+        assert result.status == expected_status
+        assert result.suppressed is (expected_status == "suppressed")
+        stored = await pg_repo.get_lead(tenant_id, lead.id)
+        assert stored is not None
+        assert stored.status == expected_status
+
+        reason = await pg_repo._pool.fetchval(
+            """
+            select reason from suppression_list
+            where tenant_id = $1 and kind = 'platform_user' and value = $2
+            """,
+            tenant_id,
+            f"reddit:{author}",
+        )
+        assert reason == expected_reason
+
+        audit = await pg_repo._pool.fetchrow(
+            """
+            select actor_type, actor_id,
+                   after->>'kind' as kind,
+                   after->>'status' as status,
+                   after->>'suppressed' as suppressed
+            from audit_log
+            where tenant_id = $1 and action = 'social.feedback'
+              and entity_id = $2
+            """,
+            tenant_id,
+            lead.id,
+        )
+        assert audit is not None
+        assert audit["actor_type"] == "integration"
+        assert audit["actor_id"] == "webhook"
+        assert audit["kind"] == kind
+        assert audit["status"] == expected_status
+        assert audit["suppressed"] == (
+            "true" if expected_status == "suppressed" else "false"
+        )
