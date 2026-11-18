@@ -1,7 +1,7 @@
 # Growth Agent 开发跟踪矩阵
 
-> 版本：v0.8  
-> 更新日期：2026-11-15  
+> 版本：v0.9<br>
+> 更新日期：2026-11-19<br>
 > 关联文档：[DEVELOPMENT_TRACKING.md](DEVELOPMENT_TRACKING.md)（Opportunity Scout 现状审计）、[business_plan.md](business_plan.md)、[Growth Agent 设计 spec](docs/superpowers/specs/2026-11-15-growth-agent-design.md)、[Phase 0 + 模块 2 实施计划](docs/superpowers/plans/2026-11-15-growth-agent-phase0-module2.md)  
 > 用途：把“需求 → 架构决策 → 设计 → 实现 → 测试 → 验收”串成一条可核对的链路，防止四条流水线在开发中漏项。
 
@@ -159,6 +159,12 @@
 | XC-10 | 拆分阈值与 runbook | 工程 | §11.10 | 待建 | 待建 | 📝 | 达到阈值有明确动作 |
 | XC-11 | Prompt/Rubric 版本化与回归 | 工程 | §11.8 | 待建 | 待建 | 📝 | 每个版本有 golden set；可回滚 |
 
+### 2.7 实现计划与交付追踪（audit / traceability）
+
+| ID | 交付物 | 来源 | 设计 / 计划 | 实现 | 测试 | 状态 | 验收 / 证据 |
+|---|---|---|---|---|---|---|---|
+| PLAN-01 | Phase 0/1 实现计划（Phase 0 平台底座 + 模块 2 社媒截流） | 设计 spec §6/§11 | [2026-11-15-growth-agent-phase0-module2.md](docs/superpowers/plans/2026-11-15-growth-agent-phase0-module2.md)（24 个任务） | `server/growth_core/`、`server/growth_social/`、`server/.env.growth.example`、`server/docs/growth-runbook.md` | `server/tests/growth/` | 🔨 | Phase 0 / 模块 2 实现中；Task 24 验收后把已完成需求行改为 ✅，并在本行记录测试/证据命令 |
+
 ---
 
 ## 3. 测试矩阵
@@ -235,3 +241,4 @@
 | 2026-11-15 | v0.6 | 确认 ADR-16；模块 3 设计完成：GitHub Release 触发、四平台三套物料、全部人工复制发布、Playwright 截图、飞书审批 |
 | 2026-11-15 | v0.7 | 确认 ADR-17；补扩展性设计：适配器注册表、lookup table、Pipeline 契约、队列分池/背压、租户配额/功能开关、故障转移、配置版本、分区索引、拆分阈值；新增 CORE-23–30、XC-06–11 |
 | 2026-11-15 | v0.8 | 完成 Phase 0 + 模块 2 实施计划（24 个任务，TDD 步骤，含迁移、队列/outbox、飞书审批、发送追踪、跟进与验收清单）；计划待评审，尚未开始编码 |
+| 2026-11-19 | v0.9 | 补充 Phase 0/1 实现计划追踪行（PLAN-01）与 runbook / `.env.growth.example`；Phase 0 + 模块 2 状态 🔨（实现中）；完成行待 Task 24 验收后标记 ✅ 并附证据命令 |

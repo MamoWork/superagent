@@ -18,6 +18,26 @@
 - ✅ Concierge CLI + 测试
 - ⏳ Domain Pack 完全配置化、1688 官方 API 接入、系统级后台/通知
 
+## Growth Agent（Phase 0/1）
+
+社媒痛点截流模块（Reddit / HN → 评分 → 草稿 → 飞书审批 → 人工发送）。完整部署与运维步骤见 [docs/growth-runbook.md](docs/growth-runbook.md)，环境变量模板见 [.env.growth.example](.env.growth.example)。
+
+运行时需要两个进程，均从 `server/` 目录启动，并先手动加载环境变量（代码不会自动读取 `.env` 文件）：
+
+```bash
+cd server
+cp .env.growth.example .env.growth     # 首次；填入真实值
+set -a; source .env.growth; set +a
+
+# 任务 worker：采集、评分、草稿、跟进，以及 outbox（飞书审批卡由它发送）
+python -m growth_social.worker
+
+# 内部 API：n8n 调用与飞书回调入口，默认 8780
+uvicorn growth_social.asgi:app --host 0.0.0.0 --port 8780
+```
+
+`GROWTH_DATABASE_URL`、`GROWTH_SERVICE_TOKEN`、`GROWTH_TENANT_ID`、`GROWTH_WORKSPACE_ID` 四项必填；只启动 API 不会发送审批卡，worker 必须同时运行。
+
 ## 开源组件
 
 不自研底层基础设施，优先复用成熟项目：
