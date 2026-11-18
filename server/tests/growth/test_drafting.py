@@ -12,6 +12,7 @@ import pytest
 from growth_core import seed_data
 from growth_core.adapters.base import ProviderNotConfigured, ProviderUnavailable
 from growth_core.config import GrowthSettings
+from growth_core.services.outbox import dispatch_outbox
 from growth_core.schemas import (
     NewOutreachMessage,
     OutreachMessage,
@@ -240,11 +241,10 @@ async def test_success_creates_message_version_approval_outbox_card_and_audit(
     assert row.topic == "feishu.card"
     assert row.payload["chat_id"] == "oc_chat"
     assert row.payload["approval_id"] == approval_id
-    assert row.payload["card"] == notifier.cards[0]
+    assert notifier.cards == []
 
-    # Card ------------------------------------------------------------
-    assert len(notifier.cards) == 1
-    card = notifier.cards[0]
+    # Card (built into the outbox row, not delivered by drafting) ------
+    card = row.payload["card"]
     assert card["config"]["wide_screen_mode"] is True
     assert card["header"]["title"]["content"] == "Social reply approval"
     serialized = json.dumps(card)
@@ -265,6 +265,12 @@ async def test_success_creates_message_version_approval_outbox_card_and_audit(
         {"approval_id": approval_id, "action": "reject"},
         {"approval_id": approval_id, "action": "later"},
     ]
+
+    # Delivery is the worker/outbox dispatcher's job.
+    sent = await dispatch_outbox(repo, notifier, now=now)
+    assert sent == 1
+    assert len(notifier.cards) == 1
+    assert notifier.cards[0] == card
 
     # Audit -----------------------------------------------------------
     created = [a for a in repo.audit if a["action"] == "social.draft_created"]
@@ -310,6 +316,19 @@ async def test_success_renders_prompt_and_uses_drafting_model(repo, now):
         "Product: example.com\n"
         "Product site: https://example.com\n"
     )
+
+
+async def test_configured_product_name_is_used_in_prompt(repo, now):
+    tenant, workspace = uuid4(), uuid4()
+    lead = _seed(repo, tenant, workspace)
+    llm = FakeLLM(_valid_draft())
+    settings = _settings(tenant, workspace, product_name="Example App")
+
+    await _draft(
+        repo, llm, FakeNotifier(), tenant, workspace, lead, settings, now
+    )
+
+    assert "Product: Example App\n" in llm.calls[0]["user"]
 
 
 async def test_community_falls_back_to_platform(repo, now):
@@ -390,6 +409,7 @@ async def test_placeholder_count_is_rejected(repo, now, body):
     assert repo.outreach_versions == []
     assert repo.approvals == []
     assert repo.outbox == []
+    assert await dispatch_outbox(repo, notifier, now=now) == 0
     assert notifier.cards == []
     rejected = [a for a in repo.audit if a["action"] == "social.draft_rejected"]
     assert len(rejected) == 1
@@ -425,6 +445,7 @@ async def test_subreddit_without_links_is_suppressed(repo, now):
     assert repo.outreach_versions == []
     assert repo.approvals == []
     assert repo.outbox == []
+    assert await dispatch_outbox(repo, notifier, now=now) == 0
     assert notifier.cards == []
     suppressed = [
         a for a in repo.audit if a["action"] == "social.draft_suppressed"
@@ -474,6 +495,7 @@ async def test_llm_policy_violation_is_rejected(repo, now):
     assert repo.outreach_versions == []
     assert repo.approvals == []
     assert repo.outbox == []
+    assert await dispatch_outbox(repo, notifier, now=now) == 0
     assert notifier.cards == []
     rejected = [a for a in repo.audit if a["action"] == "social.draft_rejected"]
     assert len(rejected) == 1
@@ -495,12 +517,15 @@ async def test_retry_after_success_creates_no_duplicates(repo, now):
     first = await _draft(
         repo, llm, notifier, tenant, workspace, lead, settings, now
     )
+    assert await dispatch_outbox(repo, notifier, now=now) == 1
+    assert len(notifier.cards) == 1
     audit_count = len(repo.audit)
     llm.exc = AssertionError("retry must not call the LLM")
 
     second = await _draft(
         repo, llm, notifier, tenant, workspace, lead, settings, now
     )
+    assert await dispatch_outbox(repo, notifier, now=now) == 0
 
     assert second.id == first.id
     assert len(llm.calls) == 1
@@ -524,6 +549,7 @@ async def test_retry_after_success_resends_card_when_outbox_row_is_missing(
     first = await _draft(
         repo, llm, notifier, tenant, workspace, lead, settings, now
     )
+    assert await dispatch_outbox(repo, notifier, now=now) == 1
     assert len(notifier.cards) == 1
     repo.outbox.clear()
     llm.exc = AssertionError("retry must not call the LLM")
@@ -538,6 +564,7 @@ async def test_retry_after_success_resends_card_when_outbox_row_is_missing(
     assert len(repo.outreach_versions) == 1
     assert len(repo.approvals) == 1
     assert len(repo.outbox) == 1
+    assert await dispatch_outbox(repo, notifier, now=now) == 1
     assert len(notifier.cards) == 2
 
 
@@ -576,6 +603,7 @@ async def test_crash_window_without_version_returns_existing(repo, now):
     assert repo.outreach_versions == []
     assert repo.approvals == []
     assert repo.outbox == []
+    assert await dispatch_outbox(repo, notifier, now=now) == 0
     assert notifier.cards == []
 
 
@@ -603,6 +631,7 @@ async def test_retry_after_rejection_returns_without_card(repo, now):
     assert repo.outreach_versions == []
     assert repo.approvals == []
     assert repo.outbox == []
+    assert await dispatch_outbox(repo, notifier, now=now) == 0
     assert notifier.cards == []
 
 
@@ -706,6 +735,7 @@ async def test_llm_failure_leaves_no_rows_and_lead_unchanged(repo, now):
     assert repo.approvals == []
     assert repo.outbox == []
     assert repo.audit == []
+    assert await dispatch_outbox(repo, notifier, now=now) == 0
     assert notifier.cards == []
     stored = await repo.get_lead(tenant, lead.id)
     assert stored is not None

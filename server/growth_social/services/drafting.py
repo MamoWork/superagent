@@ -6,10 +6,10 @@ and card outbox row. Every write is keyed by ``draft:{lead_id}`` or a
 deterministic approval id so a worker retry after a partial failure cannot
 create a second message, version, approval, or card.
 
-The outbox row is the single delivery path for the card. A successful draft
-claims and dispatches it immediately; a retry re-enqueues the same
-``feishu:{approval_id}`` row (idempotent) and dispatches only if it is still
-pending, so an already-sent card is never sent twice.
+Drafting is enqueue-only: it builds the ``feishu.card`` row and leaves
+delivery to :func:`growth_core.services.outbox.dispatch_outbox`, which the
+worker loop owns. A retry re-enqueues the same ``feishu:{approval_id}`` row
+(idempotently), so an already-pending or already-sent card is never duplicated.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ from growth_core.schemas import (
     OutreachMessage,
     SocialLead,
 )
-from growth_core.services.outbox import dispatch_outbox
 from growth_social.schemas import IntentScore, ReplyDraft
 from growth_social.services.cards import build_approval_card
 from growth_social.services.link_policy import (
@@ -131,25 +130,8 @@ async def _record_policy_outcome(
     return message
 
 
-async def _deliver_pending_cards(
-    repo: GrowthRepository,
-    notifier: Notifier | None,
-    clock: datetime,
-) -> None:
-    """Claim and send any pending card rows, including this draft's row.
-
-    Dispatch is row-idempotent: rows already marked ``sent`` are never claimed,
-    so a retry cannot send a second card. A missing row (crash before the
-    outbox write) is re-created by the caller and delivered here.
-    """
-    if notifier is None:
-        return
-    await dispatch_outbox(repo, notifier, now=clock)
-
-
 async def _resume_existing(
     repo: GrowthRepository,
-    notifier: Notifier | None,
     *,
     tenant_id: UUID,
     workspace_id: UUID,
@@ -220,7 +202,6 @@ async def _resume_existing(
     await repo.update_lead_status(
         tenant_id, lead.id, lead.status, "draft_ready"
     )
-    await _deliver_pending_cards(repo, notifier, clock)
     return existing
 
 
@@ -235,7 +216,12 @@ async def draft_reply(
     settings: GrowthSettings,
     now: datetime | None = None,
 ) -> OutreachMessage:
-    """Draft one reply for a lead and hand it to the Feishu approval flow."""
+    """Draft one reply for a lead and enqueue its Feishu approval card.
+
+    ``notifier`` is accepted for the worker handler but is not used here:
+    delivery is performed by
+    :func:`growth_core.services.outbox.dispatch_outbox`.
+    """
     clock = _clock(now)
 
     existing = await repo.find_message_by_dedupe_key(
@@ -244,7 +230,6 @@ async def draft_reply(
     if existing is not None:
         return await _resume_existing(
             repo,
-            notifier,
             tenant_id=tenant_id,
             workspace_id=workspace_id,
             lead_id=lead_id,
@@ -271,7 +256,7 @@ async def draft_reply(
         community=lead.subreddit or lead.platform,
         title=lead.title,
         body=lead.body,
-        product_name=settings.product_domain,
+        product_name=settings.product_name or settings.product_domain,
         product_url=settings.product_url,
     )
     draft = await llm.complete_json(
@@ -424,5 +409,4 @@ async def draft_reply(
         )
     )
 
-    await _deliver_pending_cards(repo, notifier, clock)
     return message
