@@ -11,6 +11,10 @@ idempotent: the retry task and the draft are both keyed deterministically, so a
 worker crash between any two writes never produces a second follow-up or a
 duplicate approval card.
 
+Link rendering, link policy, and draft creation are shared with first replies
+in :mod:`growth_social.services.draft_flow`, so both paths enforce exactly the
+same security rules.
+
 Nothing here posts, comments, or DMs. A drafted follow-up only enqueues a
 ``feishu.card`` outbox row; delivery belongs to
 :func:`growth_core.services.outbox.dispatch_outbox`.
@@ -24,23 +28,14 @@ from uuid import UUID
 from growth_core.adapters.base import LLMClient, Notifier, ProviderNotConfigured
 from growth_core.config import GrowthSettings
 from growth_core.repositories.base import GrowthRepository
-from growth_core.schemas import (
-    NewAuditEntry,
-    NewOutreachMessage,
-    NewOutreachVersion,
-    NewTask,
-    OutreachMessage,
-    SocialLead,
-)
+from growth_core.schemas import NewTask, OutreachMessage, SocialLead
 from growth_social.schemas import ReplyDraft
-from growth_social.services.approval import (
-    ensure_approval_and_enqueue_card,
-    subreddit_allows_links,
-)
-from growth_social.services.link_policy import (
-    LinkPolicyConfig,
-    build_utm_url,
-    validate_link_policy,
+from growth_social.services.approval import ensure_approval_and_enqueue_card
+from growth_social.services.draft_flow import (
+    PLACEHOLDER_COUNT,
+    create_draft_with_approval,
+    record_policy_outcome,
+    render_reply_link,
 )
 from growth_social.services.prompts import render_user_prompt
 
@@ -48,7 +43,6 @@ __all__ = ["FollowUpDecision", "process_followup_check"]
 
 PROMPT_KEY = "social_followup"
 
-_LINK_PLACEHOLDER = "{{LINK}}"
 #: Follow-ups are pointless once the lead has replied or been closed.
 _CLOSED_LEAD_STATUSES = frozenset(
     {"replied", "converted", "suppressed", "rejected"}
@@ -58,7 +52,6 @@ _CLOSED_LEAD_STATUSES = frozenset(
 _REPAIRABLE_STATUSES = frozenset({"draft_ready", "approved"})
 
 _MISSING_PROMPT = "PROVIDER_NOT_CONFIGURED: social_followup prompt"
-_PLACEHOLDER_COUNT = "PLACEHOLDER_COUNT"
 
 
 class FollowUpDecision:
@@ -78,89 +71,8 @@ def _require_setting(value: str, name: str) -> None:
         raise ProviderNotConfigured(f"PROVIDER_NOT_CONFIGURED: {name}")
 
 
-def _audit(
-    *,
-    tenant_id: UUID,
-    workspace_id: UUID,
-    action: str,
-    message_id: UUID,
-    after: dict | None = None,
-) -> NewAuditEntry:
-    return NewAuditEntry(
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        actor_type="service",
-        action=action,
-        entity_type="outreach_message",
-        entity_id=message_id,
-        after=after,
-    )
-
-
 def _dedupe_key(original_message_id: UUID, index: int) -> str:
     return f"followup:{original_message_id}:{index}"
-
-
-def _new_followup_message(
-    *,
-    tenant_id: UUID,
-    workspace_id: UUID,
-    lead: SocialLead,
-    original_message_id: UUID,
-    index: int,
-    status: str,
-    metadata: dict,
-) -> NewOutreachMessage:
-    return NewOutreachMessage(
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        channel="social",
-        provider=lead.platform,
-        lead_id=lead.id,
-        status=status,
-        dedupe_key=_dedupe_key(original_message_id, index),
-        metadata=metadata,
-    )
-
-
-async def _record_policy_outcome(
-    repo: GrowthRepository,
-    *,
-    tenant_id: UUID,
-    workspace_id: UUID,
-    lead: SocialLead,
-    original_message_id: UUID,
-    index: int,
-    status: str,
-    violations: list[str],
-    action: str,
-) -> OutreachMessage:
-    """Persist a rejected or suppressed follow-up and its audit entry.
-
-    The dedupe key matches the one a successful draft would use, so a retry
-    finds this row instead of drafting again.
-    """
-    message = await repo.create_message(
-        _new_followup_message(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            lead=lead,
-            original_message_id=original_message_id,
-            index=index,
-            status=status,
-            metadata={"policy_violations": list(violations)},
-        )
-    )
-    await repo.write_audit(
-        _audit(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            action=action,
-            message_id=message.id,
-            after={"policy_violations": list(violations)},
-        )
-    )
-    return message
 
 
 async def _resume_existing(
@@ -258,9 +170,8 @@ async def process_followup_check(
         return None
 
     index = count + 1
-    existing = await repo.find_message_by_dedupe_key(
-        tenant_id, _dedupe_key(original_message_id, index)
-    )
+    dedupe_key = _dedupe_key(original_message_id, index)
+    existing = await repo.find_message_by_dedupe_key(tenant_id, dedupe_key)
     if existing is not None:
         return await _resume_existing(
             repo,
@@ -272,13 +183,13 @@ async def process_followup_check(
             clock=clock,
         )
 
-    _require_setting(settings.product_url, "product_url")
-    _require_setting(settings.product_domain, "product_domain")
-    _require_setting(settings.feishu_chat_id, "feishu_chat_id")
-
     prompt = await repo.get_prompt_template(tenant_id, PROMPT_KEY)
     if prompt is None:
         raise ProviderNotConfigured(_MISSING_PROMPT)
+
+    _require_setting(settings.product_url, "product_url")
+    _require_setting(settings.product_domain, "product_domain")
+    _require_setting(settings.feishu_chat_id, "feishu_chat_id")
 
     previous = await repo.get_latest_version(tenant_id, original_message_id)
     previous_text = previous.body_text if previous is not None else ""
@@ -298,122 +209,81 @@ async def process_followup_check(
         model=settings.llm_drafting_model or None,
     )
 
-    if draft.body_markdown.count(_LINK_PLACEHOLDER) != 1:
-        return await _record_policy_outcome(
+    rendered = render_reply_link(draft, lead=lead, settings=settings)
+    if rendered.placeholder_count != 1:
+        return await record_policy_outcome(
             repo,
             tenant_id=tenant_id,
             workspace_id=workspace_id,
             lead=lead,
-            original_message_id=original_message_id,
-            index=index,
-            status="rejected",
-            violations=[_PLACEHOLDER_COUNT],
-            action="social.followup_rejected",
+            dedupe_key=dedupe_key,
+            violations=[PLACEHOLDER_COUNT],
+            suppressed=False,
+            audit_action="social.followup_rejected",
+            clock=clock,
         )
-
-    url = build_utm_url(
-        settings.product_url,
-        draft.link_path,
-        lead_id=str(lead.id),
-        platform=lead.platform,
-    )
-    final_text = draft.body_markdown.replace(_LINK_PLACEHOLDER, url)
-
-    policy = validate_link_policy(
-        final_text,
-        LinkPolicyConfig(allowed_domain=settings.product_domain),
-        subreddit_allows_links=subreddit_allows_links(lead),
-    )
-    if policy.manual_only:
-        return await _record_policy_outcome(
+    if rendered.policy.manual_only:
+        return await record_policy_outcome(
             repo,
             tenant_id=tenant_id,
             workspace_id=workspace_id,
             lead=lead,
-            original_message_id=original_message_id,
-            index=index,
-            status="suppressed",
-            violations=policy.violations,
-            action="social.followup_suppressed",
+            dedupe_key=dedupe_key,
+            violations=rendered.policy.violations,
+            suppressed=True,
+            audit_action="social.followup_suppressed",
+            clock=clock,
         )
-    if not policy.ok:
-        return await _record_policy_outcome(
+    if not rendered.policy.ok:
+        return await record_policy_outcome(
             repo,
             tenant_id=tenant_id,
             workspace_id=workspace_id,
             lead=lead,
-            original_message_id=original_message_id,
-            index=index,
-            status="rejected",
-            violations=policy.violations,
-            action="social.followup_rejected",
+            dedupe_key=dedupe_key,
+            violations=rendered.policy.violations,
+            suppressed=False,
+            audit_action="social.followup_rejected",
+            clock=clock,
         )
 
-    message = await repo.create_message(
-        _new_followup_message(
+    async def _resume(message: OutreachMessage) -> OutreachMessage:
+        return await _resume_existing(
+            repo,
             tenant_id=tenant_id,
             workspace_id=workspace_id,
+            existing=message,
             lead=lead,
-            original_message_id=original_message_id,
-            index=index,
-            status="draft_ready",
-            metadata={
-                "followup_of": str(original_message_id),
-                "followup_index": index,
-                "subreddit": lead.subreddit,
-                "has_link": True,
-                "draft_version": 1,
-            },
+            settings=settings,
+            clock=clock,
         )
-    )
 
-    version = await repo.get_latest_version(tenant_id, message.id)
-    if version is None:
-        new_version = NewOutreachVersion(
-            tenant_id=tenant_id,
-            message_id=message.id,
-            version=1,
-            body_text=final_text,
-            cta_url=url,
-            model=getattr(llm, "model", None) or None,
-            prompt_version=str(prompt.version),
-            risk_flags=list(draft.risk_flags),
-        )
-        try:
-            version = await repo.create_version(new_version)
-        except Exception:
-            # Neither the fake nor the Postgres repository exposes a shared
-            # unique-violation type. If another worker won the
-            # ``(message, version=1)`` insert, continue only when its row is
-            # now visible.
-            version = await repo.get_latest_version(tenant_id, message.id)
-            if version is None:
-                raise
-
-    approval_id = f"{message.id}:v1"
-    await ensure_approval_and_enqueue_card(
+    return await create_draft_with_approval(
         repo,
         tenant_id=tenant_id,
         workspace_id=workspace_id,
-        message=message,
-        approval_id=approval_id,
         lead=lead,
-        version=version,
         settings=settings,
+        dedupe_key=dedupe_key,
+        version_number=1,
+        final_text=rendered.final_text,
+        url=rendered.url,
+        model=getattr(llm, "model", None) or None,
+        prompt_version=str(prompt.version),
+        risk_flags=list(draft.risk_flags),
+        metadata={
+            "followup_of": str(original_message_id),
+            "followup_index": index,
+            "subreddit": lead.subreddit,
+            "has_link": True,
+            "draft_version": 1,
+        },
+        audit_action="social.followup_created",
         clock=clock,
+        mark_lead_draft_ready=False,
+        audit_after={
+            "original_message_id": str(original_message_id),
+            "followup_index": index,
+        },
+        on_existing=_resume,
     )
-    await repo.write_audit(
-        _audit(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            action="social.followup_created",
-            message_id=message.id,
-            after={
-                "original_message_id": str(original_message_id),
-                "followup_index": index,
-            },
-        )
-    )
-
-    updated = await repo.get_message(tenant_id, message.id)
-    return updated or message

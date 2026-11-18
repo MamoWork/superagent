@@ -6,6 +6,10 @@ and card outbox row. Every write is keyed by ``draft:{lead_id}`` or a
 deterministic approval id so a worker retry after a partial failure cannot
 create a second message, version, approval, or card.
 
+The link rendering, policy recording, and draft creation pipeline is shared
+with follow-up drafting in :mod:`growth_social.services.draft_flow`, so the
+security-critical rules cannot drift between the two.
+
 Drafting is enqueue-only: it builds the ``feishu.card`` row and leaves
 delivery to :func:`growth_core.services.outbox.dispatch_outbox`, which the
 worker loop owns. A retry re-enqueues the same ``feishu:{approval_id}`` row
@@ -20,22 +24,14 @@ from uuid import UUID
 from growth_core.adapters.base import LLMClient, Notifier, ProviderNotConfigured
 from growth_core.config import GrowthSettings
 from growth_core.repositories.base import GrowthRepository
-from growth_core.schemas import (
-    NewAuditEntry,
-    NewOutreachMessage,
-    NewOutreachVersion,
-    OutreachMessage,
-    SocialLead,
-)
+from growth_core.schemas import OutreachMessage, SocialLead
 from growth_social.schemas import ReplyDraft
-from growth_social.services.approval import (
-    ensure_approval_and_enqueue_card,
-    subreddit_allows_links,
-)
-from growth_social.services.link_policy import (
-    LinkPolicyConfig,
-    build_utm_url,
-    validate_link_policy,
+from growth_social.services.approval import ensure_approval_and_enqueue_card
+from growth_social.services.draft_flow import (
+    PLACEHOLDER_COUNT,
+    create_draft_with_approval,
+    record_policy_outcome,
+    render_reply_link,
 )
 from growth_social.services.prompts import render_user_prompt
 
@@ -43,14 +39,12 @@ __all__ = ["draft_reply"]
 
 PROMPT_KEY = "social_reply"
 
-_LINK_PLACEHOLDER = "{{LINK}}"
 # Only pre-send states may need a repair card. ``sent`` is terminal: its card
 # already went out, so re-drafting must not manufacture a fresh approval.
 _REPAIRABLE_STATUSES = frozenset({"draft_ready", "approved"})
 
 _MISSING_LEAD = "LEAD_NOT_FOUND"
 _MISSING_PROMPT = "PROVIDER_NOT_CONFIGURED: social_reply prompt"
-_PLACEHOLDER_COUNT = "PLACEHOLDER_COUNT"
 
 
 def _clock(now: datetime | None) -> datetime:
@@ -60,60 +54,6 @@ def _clock(now: datetime | None) -> datetime:
 def _require_setting(value: str, name: str) -> None:
     if not value:
         raise ProviderNotConfigured(f"PROVIDER_NOT_CONFIGURED: {name}")
-
-
-def _audit(
-    *,
-    tenant_id: UUID,
-    workspace_id: UUID,
-    action: str,
-    message_id: UUID,
-    after: dict | None = None,
-) -> NewAuditEntry:
-    return NewAuditEntry(
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        actor_type="service",
-        action=action,
-        entity_type="outreach_message",
-        entity_id=message_id,
-        after=after,
-    )
-
-
-async def _record_policy_outcome(
-    repo: GrowthRepository,
-    *,
-    tenant_id: UUID,
-    workspace_id: UUID,
-    lead: SocialLead,
-    status: str,
-    violations: list[str],
-    action: str,
-) -> OutreachMessage:
-    """Persist a rejected or suppressed draft and its audit entry."""
-    message = await repo.create_message(
-        NewOutreachMessage(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            channel="social",
-            provider=lead.platform,
-            lead_id=lead.id,
-            status=status,
-            dedupe_key=f"draft:{lead.id}",
-            metadata={"policy_violations": list(violations)},
-        )
-    )
-    await repo.write_audit(
-        _audit(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            action=action,
-            message_id=message.id,
-            after={"policy_violations": list(violations)},
-        )
-    )
-    return message
 
 
 async def _mark_lead_draft_ready(
@@ -228,123 +168,68 @@ async def draft_reply(
         model=settings.llm_drafting_model or None,
     )
 
-    if draft.body_markdown.count(_LINK_PLACEHOLDER) != 1:
-        return await _record_policy_outcome(
+    rendered = render_reply_link(draft, lead=lead, settings=settings)
+    if rendered.placeholder_count != 1:
+        return await record_policy_outcome(
             repo,
             tenant_id=tenant_id,
             workspace_id=workspace_id,
             lead=lead,
-            status="rejected",
-            violations=[_PLACEHOLDER_COUNT],
-            action="social.draft_rejected",
-        )
-
-    url = build_utm_url(
-        settings.product_url,
-        draft.link_path,
-        lead_id=str(lead.id),
-        platform=lead.platform,
-    )
-    final_text = draft.body_markdown.replace(_LINK_PLACEHOLDER, url)
-
-    policy = validate_link_policy(
-        final_text,
-        LinkPolicyConfig(allowed_domain=settings.product_domain),
-        subreddit_allows_links=subreddit_allows_links(lead),
-    )
-    if policy.manual_only:
-        return await _record_policy_outcome(
-            repo,
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            lead=lead,
-            status="suppressed",
-            violations=policy.violations,
-            action="social.draft_suppressed",
-        )
-    if not policy.ok:
-        return await _record_policy_outcome(
-            repo,
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            lead=lead,
-            status="rejected",
-            violations=policy.violations,
-            action="social.draft_rejected",
-        )
-
-    message = await repo.create_message(
-        NewOutreachMessage(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            channel="social",
-            provider=lead.platform,
-            lead_id=lead.id,
-            status="draft_ready",
             dedupe_key=f"draft:{lead.id}",
-            metadata={
-                "subreddit": lead.subreddit,
-                "has_link": True,
-                "platform": lead.platform,
-                "draft_version": 1,
-            },
+            violations=[PLACEHOLDER_COUNT],
+            suppressed=False,
+            audit_action="social.draft_rejected",
+            clock=clock,
         )
-    )
-
-    version = await repo.get_latest_version(tenant_id, message.id)
-    if version is None:
-        new_version = NewOutreachVersion(
+    if rendered.policy.manual_only:
+        return await record_policy_outcome(
+            repo,
             tenant_id=tenant_id,
-            message_id=message.id,
-            version=1,
-            body_text=final_text,
-            cta_url=url,
-            model=(
-                settings.llm_drafting_model
-                or getattr(llm, "model", None)
-                or None
-            ),
-            prompt_version=str(prompt.version),
-            risk_flags=list(draft.risk_flags),
+            workspace_id=workspace_id,
+            lead=lead,
+            dedupe_key=f"draft:{lead.id}",
+            violations=rendered.policy.violations,
+            suppressed=True,
+            audit_action="social.draft_suppressed",
+            clock=clock,
         )
-        try:
-            version = await repo.create_version(new_version)
-        except Exception:
-            # Broad catch by necessity: neither the in-memory fake nor the
-            # Postgres repository exposes a shared unique-violation type here.
-            # This protects the create-version crash window: another worker won
-            # the ``(message, version=1)`` insert, so continue only if its row
-            # is now visible.
-            version = await repo.get_latest_version(tenant_id, message.id)
-            if version is None:
-                raise
+    if not rendered.policy.ok:
+        return await record_policy_outcome(
+            repo,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            lead=lead,
+            dedupe_key=f"draft:{lead.id}",
+            violations=rendered.policy.violations,
+            suppressed=False,
+            audit_action="social.draft_rejected",
+            clock=clock,
+        )
 
-    approval_id = f"{message.id}:v{version.version}"
-    await ensure_approval_and_enqueue_card(
+    return await create_draft_with_approval(
         repo,
         tenant_id=tenant_id,
         workspace_id=workspace_id,
-        message=message,
-        approval_id=approval_id,
         lead=lead,
-        version=version,
         settings=settings,
+        dedupe_key=f"draft:{lead.id}",
+        version_number=1,
+        final_text=rendered.final_text,
+        url=rendered.url,
+        model=(
+            settings.llm_drafting_model
+            or getattr(llm, "model", None)
+            or None
+        ),
+        prompt_version=str(prompt.version),
+        risk_flags=list(draft.risk_flags),
+        metadata={
+            "subreddit": lead.subreddit,
+            "has_link": True,
+            "platform": lead.platform,
+            "draft_version": 1,
+        },
+        audit_action="social.draft_created",
         clock=clock,
+        mark_lead_draft_ready=True,
     )
-    # The lead normally moves qualified -> draft_ready; a lost compare-and-set
-    # means another worker already advanced it, which is fine.
-    await _mark_lead_draft_ready(repo, tenant_id, lead)
-    await repo.write_audit(
-        _audit(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            action="social.draft_created",
-            message_id=message.id,
-            after={
-                "approval_id": approval_id,
-                "draft_version": version.version,
-            },
-        )
-    )
-
-    return message

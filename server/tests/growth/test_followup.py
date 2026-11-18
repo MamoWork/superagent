@@ -303,7 +303,57 @@ async def test_followup_reschedules_until_one_day(repo, now):
     assert notifier.cards == []
 
 
-async def test_followup_proceeds_when_no_message_was_sent_yet(repo, now):
+async def test_followup_uses_configured_minimum_interval(repo, now):
+    tenant, workspace = uuid4(), uuid4()
+    lead, original = await _seed(repo, tenant, workspace)
+    settings = _settings(tenant, workspace, followup_min_interval_hours=2)
+    at = now + timedelta(hours=1)
+
+    result = await _process(
+        repo,
+        FakeLLM(_valid_draft()),
+        FakeNotifier(),
+        tenant,
+        workspace,
+        original,
+        settings,
+        at,
+    )
+
+    assert result is None
+    tasks = repo.tasks_for(f"followup:{original.id}")
+    assert len(tasks) == 1
+    assert tasks[0].run_after == now + timedelta(hours=2)
+    assert tasks[0].idempotency_key == (
+        f"followup:{original.id}:retry:{int(at.timestamp())}"
+    )
+
+
+async def test_followup_stop_precedes_reschedule_at_one_hour(repo, now):
+    tenant, workspace = uuid4(), uuid4()
+    lead, original = await _seed(repo, tenant, workspace)
+    lead.status = "replied"
+    notifier = FakeNotifier()
+
+    result = await _process(
+        repo,
+        FakeLLM(_valid_draft()),
+        notifier,
+        tenant,
+        workspace,
+        original,
+        _settings(tenant, workspace),
+        now + timedelta(hours=1),
+    )
+
+    # A stopped lead is turned away before the interval is even considered.
+    assert result is None
+    assert repo.tasks == []
+    assert repo.outbox == []
+    assert notifier.cards == []
+
+
+async def test_followup_proceeds_when_last_sent_at_is_none(repo, now):
     tenant, workspace = uuid4(), uuid4()
     lead, original = await _seed(repo, tenant, workspace)
     original.sent_at = None
@@ -870,6 +920,108 @@ async def test_duplicate_dedupe_returns_existing_without_new_writes(repo, now):
     assert len(_created_audits(repo)) == 1
 
 
+async def test_followup_resume_repairs_missing_approval_and_card(repo, now):
+    tenant, workspace = uuid4(), uuid4()
+    lead, original = await _seed(repo, tenant, workspace)
+    settings = _settings(tenant, workspace)
+    at = now + timedelta(hours=24)
+
+    created = await _process(
+        repo,
+        FakeLLM(_valid_draft()),
+        FakeNotifier(),
+        tenant,
+        workspace,
+        original,
+        settings,
+        at,
+    )
+    assert created is not None
+    approval_id = f"{created.id}:v1"
+    assert len(repo.approvals) == 1
+    assert len(repo.outbox_for(f"feishu:{approval_id}")) == 1
+
+    # Simulate a retry of the same check after both card rows were lost.
+    repo.approvals.clear()
+    repo.outbox.clear()
+
+    async def stale_count(tenant_id, original_message_id):
+        return 0
+
+    repo.count_followups = stale_count
+    repaired = await _process(
+        repo,
+        FakeLLM(_valid_draft()),
+        FakeNotifier(),
+        tenant,
+        workspace,
+        original,
+        settings,
+        at,
+    )
+
+    assert repaired is not None
+    assert repaired.id == created.id
+    assert len(repo.messages) == 2
+    assert len(repo.outreach_versions) == 2
+    assert len(repo.approvals) == 1
+    assert repo.approvals[0].approval_id == approval_id
+    assert len(repo.outbox_for(f"feishu:{approval_id}")) == 1
+    assert len(repo.outbox) == 1
+    assert len(_created_audits(repo)) == 1
+
+
+async def test_followup_concurrent_create_routes_through_resume(repo, now):
+    tenant, workspace = uuid4(), uuid4()
+    lead, original = await _seed(repo, tenant, workspace)
+    settings = _settings(tenant, workspace)
+    at = now + timedelta(hours=24)
+
+    created = await _process(
+        repo,
+        FakeLLM(_valid_draft()),
+        FakeNotifier(),
+        tenant,
+        workspace,
+        original,
+        settings,
+        at,
+    )
+    assert created is not None
+    approval_id = f"{created.id}:v1"
+    repo.approvals.clear()
+    repo.outbox.clear()
+
+    # Simulate the ON CONFLICT race: our dedupe lookup missed the row another
+    # worker already created and versioned.
+    async def stale_count(tenant_id, original_message_id):
+        return 0
+
+    async def missed_dedupe(tenant_id, dedupe_key):
+        return None
+
+    repo.count_followups = stale_count
+    repo.find_message_by_dedupe_key = missed_dedupe
+    resumed = await _process(
+        repo,
+        FakeLLM(_valid_draft()),
+        FakeNotifier(),
+        tenant,
+        workspace,
+        original,
+        settings,
+        at,
+    )
+
+    assert resumed is not None
+    assert resumed.id == created.id
+    assert len(repo.messages) == 2
+    assert len(repo.outreach_versions) == 2
+    assert len(repo.approvals) == 1
+    assert len(repo.outbox_for(f"feishu:{approval_id}")) == 1
+    assert len(_created_audits(repo)) == 1
+
+
 async def test_rejected_followup_is_idempotent_on_retry(repo, now):
     tenant, workspace = uuid4(), uuid4()
     lead, original = await _seed(repo, tenant, workspace)
@@ -935,6 +1087,34 @@ async def test_followup_missing_prompt_raises_provider_not_configured(
     assert llm.calls == []
     assert len(repo.messages) == 1
     assert repo.outbox == []
+
+
+async def test_missing_prompt_error_precedes_settings_validation(repo, now):
+    tenant, workspace = uuid4(), uuid4()
+    lead, original = await _seed(repo, tenant, workspace, prompt=False)
+    llm = FakeLLM(_valid_draft())
+    settings = _settings(
+        tenant,
+        workspace,
+        product_url="",
+        product_domain="",
+        feishu_chat_id="",
+    )
+
+    with pytest.raises(ProviderNotConfigured) as excinfo:
+        await _process(
+            repo,
+            llm,
+            FakeNotifier(),
+            tenant,
+            workspace,
+            original,
+            settings,
+            now + timedelta(hours=24),
+        )
+
+    assert str(excinfo.value) == "PROVIDER_NOT_CONFIGURED: social_followup prompt"
+    assert llm.calls == []
 
 
 async def test_followup_llm_errors_propagate_unchanged(repo, now):
