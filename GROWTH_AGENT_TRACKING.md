@@ -48,7 +48,7 @@
 
 ## 2. 需求跟踪矩阵
 
-> Phase 0 与模块 2 已完成并通过 Task 24 验收（证据见 §7）；模块 1/3/4 仍为设计阶段。
+> 计划范围内（Phase 0 + 模块 2）完成并通过 Task 24 验收（证据见 §7）；计划外的 CORE 行与模块 1/3/4 仍未完成。
 
 ### 2.1 Growth Core（平台底座）
 
@@ -63,12 +63,12 @@
 | CORE-07 | `audit_log` 审批与状态变更审计 | 合规 | §2 | `growth_core/migrations/0001_core.sql`（audit_log） | `test_approval.py`; `test_sending.py::test_mark_sent_records_delivery_and_audit` | ✅ | 每次 approve/reject/send 可追溯 |
 | CORE-08 | Supabase RLS 策略 | 安全 | §7 | `growth_core/migrations/0003_rls.sql` | `test_migrations.py::test_social_tables_exist_and_status_is_constrained`; `test_postgres_integration.py::test_rls_hides_other_tenant` | ✅ | 前端 JWT 不能跨 tenant 读写 |
 | CORE-09 | 观测与告警（pipeline_runs、死信、成本） | 运维 | §7 | 待建 | 待建 | 📝 | 死信/异常推送到飞书 |
-| CORE-10 | `opportunity_core` 共享包抽取 | 复用 | §3 | `opportunity_core/`（models/providers） | `app/` 已 import；全量 pytest 通过 | ✅ | Opportunity Scout 与 Growth Agent 都能 import，测试通过 |
+| CORE-10 | `opportunity_core` 共享包抽取 | 复用 | §3 | `opportunity_core/`（models/providers） | `server/app/` 已 import；全量 pytest 通过 | 🧪 | `opportunity_core` 已抽取且 Opportunity Scout 使用；Growth 侧复用尚未接线（见 §7.3） |
 | CORE-11 | n8n 基础工作流（Cron/Webhook/审批卡） | 架构 | §6 | 待建 | 待建 | 📝 | 能触发 worker 并接收审批回调 |
 | CORE-12 | 内部 API 鉴权（service token） | 安全 | §7 | `growth_core/api/deps.py`; `growth_social/api.py` | `test_api_auth.py` | ✅ | 无 token 的 `/internal/*` 请求被拒绝 |
 | CORE-13 | `growth_sources` 采集源配置（subreddit/query/cadence） | 模块 2 | §3.2 | `growth_core/migrations/0002_social.sql`; `growth_social/services/ingest.py` | `test_ingest.py`; `test_migrations.py` | ✅ | 可启停/调频；记录 last_run/last_error |
-| CORE-14 | `outreach_messages` + `outreach_versions` 统一触达消息、版本、审批与最终文本 | 模块 2/4 | §3.4/§3.5 | `migrations/0002_social.sql`（outreach_messages/versions）; `drafting.py`; `approval.py` | `test_drafting.py`; `test_approval.py` | ✅ | 社交与邮件共用；每次生成/修改/审批可追溯 |
-| CORE-15 | `rate_limit_rules` 平台/租户频率规则 | 合规 | §3.7 | `migrations/0002_social.sql`（rate_limit_rules）; `growth_core/services/ratelimit.py` | `test_sending.py`; `test_seed.py` | ✅ | 发送前强制校验；可配置 |
+| CORE-14 | `outreach_messages` + `outreach_versions` 统一触达消息、版本、审批与最终文本 | 模块 2/4 | §3.4/§3.5 | `server/growth_core/migrations/0002_social.sql`（outreach_messages/versions）; `drafting.py`; `approval.py` | `test_drafting.py`; `test_approval.py` | 🧪 | 社媒侧消息/版本/审批已验证；邮件复用未实现（见 §7.3） |
+| CORE-15 | `rate_limit_rules` 平台/租户频率规则 | 合规 | §3.7 | `server/growth_core/migrations/0002_social.sql`（rate_limit_rules）; `growth_core/services/ratelimit.py` | `test_sending.py`; `test_seed.py` | ✅ | 发送前强制校验；可配置 |
 | CORE-16 | `user_profiles` 用户画像、时区、营销同意状态 | 模块 4 | §4.2 | 待建 | 待建 | 📝 | 邮件只发给有同意或事务性关系的用户 |
 | CORE-17 | `event_rules` 生命周期触发规则（条件/延迟/模板/自动发送） | 模块 4 | §4.3 | 待建 | 待建 | 📝 | 规则可配置；命中可解释 |
 | CORE-18 | `coupon_codes` Stripe 优惠码、有效期与核销 | 模块 4 | §4.6 | 待建 | 待建 | 📝 | 一用户一码；48h 过期；核销可追踪 |
@@ -76,20 +76,20 @@
 | CORE-20 | `user_events` 原始事件、去重、迟到事件 | 模块 4 | §4.1 | 待建 | 待建 | 📝 | `dedupe_key` 唯一；保留原始 payload |
 | CORE-21 | `delivery_log` 邮件/社交投递、打开、点击回执 | 模块 2/4 | §4.5 | 待建 | 待建 | 📝 | 原始 webhook 可追溯；与 message_id 关联 |
 | CORE-22 | `suppression_list` 退订/硬退信/投诉/人工拉黑 | 合规 | §4.7 | 待建 | 待建 | 📝 | 发送前强制校验；永久生效直到人工解除 |
-| CORE-23 | `provider_configs` 能力-供应商配置、优先级、密钥引用 | 扩展性 | §11.2 | `migrations/0001_core.sql`（provider_configs）; `growth_core/adapters/registry.py` | `test_registry.py`; `test_seed.py` | ✅ | 新增供应商不改核心；可切换/回滚 |
+| CORE-23 | `provider_configs` 能力-供应商配置、优先级、密钥引用 | 扩展性 | §11.2 | `server/growth_core/migrations/0001_core.sql`（provider_configs）; `growth_core/adapters/registry.py` | `test_registry.py`; `test_seed.py` | ✅ | 新增供应商不改核心；可切换/回滚 |
 | CORE-24 | `tenant_quotas` 租户配额 | 扩展性 | §11.6 | 待建 | 待建 | 📝 | 超限拒绝并告警；按日/月重置 |
 | CORE-25 | `tenant_features` 功能开关 | 扩展性 | §11.6 | 待建 | 待建 | 📝 | 新适配器/流水线可灰度、可回滚 |
-| CORE-26 | `config_versions` 配置版本与回滚 | 扩展性 | §11.8 | `migrations/0001_core.sql`（config_versions）; `growth_core/repositories/postgres.py` | `test_postgres_integration.py::test_config_rollback_restores_snapshot` | ✅ | 变更可审计；一键回滚 |
+| CORE-26 | `config_versions` 配置版本与回滚 | 扩展性 | §11.8 | `server/growth_core/migrations/0001_core.sql`（config_versions）; `growth_core/repositories/postgres.py` | `test_postgres_integration.py::test_config_rollback_restores_snapshot` | ✅ | 变更可审计；一键回滚 |
 | CORE-27 | `provider_health` 供应商健康与熔断 | 扩展性 | §11.7 | 待建 | 待建 | 📝 | 故障自动降级；半开探测 |
-| CORE-28 | `rate_limit_counters` 限流计数 | 扩展性 | §11.5 | `migrations/0002_social.sql`（rate_limit_counters） | `test_postgres_integration.py::test_rate_limit_is_atomic_under_concurrency` | ✅ | 原子计数；跨 worker 一致 |
-| CORE-29 | `prompt_templates` Prompt 版本、输出 schema、模型提示 | 扩展性 | §11.8 | `migrations/0001_core.sql`（prompt_templates）; `growth_core/seed_data.py` | `test_scoring.py`; `test_drafting.py`; `test_followup.py`; `test_seed.py` | ✅ | 版本化、A/B、回滚；生成记录 prompt_version |
-| CORE-30 | `scoring_rubrics` 评分卡配置化 | 扩展性 | §11.8 | `migrations/0001_core.sql`（scoring_rubrics）; `growth_core/seed_data.py` | `test_scoring.py`; `test_seed.py` | ✅ | 维度/权重/阈值版本化；新增领域不改代码 |
+| CORE-28 | `rate_limit_counters` 限流计数 | 扩展性 | §11.5 | `server/growth_core/migrations/0002_social.sql`（rate_limit_counters） | `test_postgres_integration.py::test_rate_limit_is_atomic_under_concurrency` | ✅ | 原子计数；跨 worker 一致 |
+| CORE-29 | `prompt_templates` Prompt 版本、输出 schema、模型提示 | 扩展性 | §11.8 | `server/growth_core/migrations/0001_core.sql`（prompt_templates）; `growth_core/seed_data.py` | `test_scoring.py`（L580 断言 prompt_version == "1"）; `test_drafting.py`; `test_followup.py`; `test_seed.py` | 🧪 | Prompt 版本化与 prompt_version 记录已验证；A/B 与回滚未实现（见 §7.3） |
+| CORE-30 | `scoring_rubrics` 评分卡配置化 | 扩展性 | §11.8 | `server/growth_core/migrations/0001_core.sql`（scoring_rubrics）; `growth_core/seed_data.py` | `test_scoring.py`; `test_seed.py` | ✅ | 维度/权重/阈值版本化；新增领域不改代码 |
 
 ### 2.2 模块 2：社媒痛点截流
 
 | ID | 需求 / 交付物 | 来源 | 设计章节 | 实现 | 测试 | 状态 | 验收标准 |
 |---|---|---|---|---|---|---|---|
-| M2-01 | Reddit 采集（subreddit + 关键词） | 用户方案 | §3.2 | `growth_social/adapters/reddit.py`; `services/ingest.py` | `test_reddit_adapter.py`; `test_ingest.py` | ✅ | 30 分钟一次；只读公开内容；限流可见 |
+| M2-01 | Reddit 采集（subreddit + 关键词） | 用户方案 | §3.2 | `growth_social/adapters/reddit.py`; `services/ingest.py` | `test_reddit_adapter.py`; `test_ingest.py` | 🧪 | Reddit/HN 只读采集适配器与 cadence 配置；实际 30 分钟调度由 n8n 承担且未实现（见 §7.3） |
 | M2-02 | HN 采集（Algolia 公开 API） | 架构补充 | §3.2 | `growth_social/adapters/hackernews.py` | `test_hackernews_adapter.py`; `test_ingest.py` | ✅ | 与 Reddit 同一 Signal 模型 |
 | M2-03 | X 采集（官方 API） | 用户方案 | §3.2 | 待建 | 待建 | ⏸ | v1 后置；取决于 API 预算/权限 |
 | M2-04 | 线索去重（platform + external_id） | 架构 | §3.2 | `services/ingest.py`; postgres `upsert_lead` ON CONFLICT | `test_ingest.py::test_duplicates_do_not_enqueue_extra_score_tasks`; `test_postgres_integration.py::test_upsert_lead_dedupes` | ✅ | 同帖不重复入库 |
@@ -97,13 +97,13 @@
 | M2-06 | Golden set 校准（50 条标注帖） | 质量 | §3.3 | `tests/growth/golden/social_posts.jsonl`（50 条） | `test_prompt_regression.py::test_golden_set_precision_at_threshold`（precision ≥ 0.8） | ✅ | 阈值 80 时 precision ≥ 0.8 |
 | M2-07 | 回复草稿生成（共情+干货+软提及+1 个官方链接） | 用户方案 | §3.4 | `growth_social/services/drafting.py`; `link_policy.py` | `test_drafting.py`; `test_link_policy.py` | ✅ | 每条带 1 个官方链接；价值先行；披露关联；无夸大/违规承诺 |
 | M2-08 | 飞书审批卡 | 用户方案 | §3.5 | `services/approval.py`; `cards.py`; `growth_core/adapters/feishu.py` | `test_approval.py`; `test_feishu.py`; `test_drafting.py::test_success_creates_message_version_approval_outbox_card_and_audit` | ✅ | v1 飞书；一键打开原帖/复制/通过/拒绝/稍后 |
-| M2-09 | 人工发送跟踪（已发送标记） | 用户方案 | §3.6 | `growth_social/services/sending.py` | `test_sending.py::test_mark_sent_stamps_send_metadata`; `::test_mark_sent_records_delivery_and_audit` | ✅ | 记录 sent_at/channel/draft_version |
+| M2-09 | 人工发送跟踪（已发送标记） | 用户方案 | §3.6 | `growth_social/services/sending.py` | `test_sending.py::test_mark_sent_transitions_and_schedules_followup`; `::test_mark_sent_stamps_send_metadata`; `::test_mark_sent_records_delivery_and_audit` | ✅ | 记录 sent_at/channel/draft_version |
 | M2-10 | 跟进提醒（每天最多 1 次，累计最多 3 次） | 用户方案 | §3.6 | `growth_social/services/followup.py` | `test_followup.py` | ✅ | 回复/退订/负反馈后立即停止 |
 | M2-11 | 抑制名单 + 频率上限（全局 50/天） | 合规 | §3.7 | `sending.py`; `followup.py`; `growth_core/services/ratelimit.py` | `test_sending.py`; `test_followup.py` | ✅ | 超限/命中抑制时禁止进入发送 |
 | M2-12 | Subreddit 规则检查 | 合规 | §3.7 | `growth_social/services/link_policy.py`; `drafting.py` | `test_link_policy.py::test_no_link_subreddit_marks_manual_only`; `test_drafting.py::test_subreddit_without_links_is_suppressed` | ✅ | 禁自推的板块不生成“可发送”草稿 |
 | M2-13 | 漏斗指标（发现/合格/通过/发送/回复/转化） | 运维 | §3.8 | 待建 | 待建 | 📝 | 每周自动报表 |
 | M2-14 | 安全测试（广告帖、同行、封号风险） | 质量 | §3.9 | `growth_social/adapters/`（只读 GET） | `test_reddit_adapter.py`; `test_hackernews_adapter.py`; `test_social_e2e.py`; adapters grep | ✅ | 无自动发送代码路径；危险帖被拦截 |
-| M2-15 | E2E（n8n → worker → 审批 → 回调） | 质量 | §3.9 | `growth_social/worker.py`; `handlers.py` | `test_social_e2e.py::test_social_flow_from_post_to_followup` | ✅ | 一条完整链路可重复跑通 |
+| M2-15 | E2E（n8n → worker → 审批 → 回调） | 质量 | §3.9 | `growth_social/worker.py`; `handlers.py` | `test_social_e2e.py::test_social_flow_from_post_to_followup` | 🧪 | worker 级链路 post→lead→score→draft→card→approval→sent→follow-up 已验证；n8n 编排属 CORE-11，未实现 |
 
 ### 2.3 模块 4：生命周期触达
 
@@ -151,7 +151,7 @@
 | XC-02 | 成本控制（LLM/API 预算与告警） | 运维 | §7 | 待建 | 待建 | 📝 | 按 tenant/pipeline 日预算 |
 | XC-03 | 观测（结构化日志/漏斗/死信告警） | 运维 | §7 | 待建 | 待建 | 📝 | 关键失败 5 分钟内告警 |
 | XC-04 | 密钥与权限（Vault/service token/RLS） | 安全 | §7 | 待建 | 待建 | 📝 | 前端不可见密钥；跨租户拒绝 |
-| XC-05 | 文档（spec/plan/runbook/跟踪矩阵） | 工程 | 全篇 | `docs/growth-runbook.md`; `.env.growth.example`; spec/plan | — | ✅ | 每模块有 spec + plan + runbook |
+| XC-05 | 文档（spec/plan/runbook/跟踪矩阵） | 工程 | 全篇 | `docs/growth-runbook.md`; `.env.growth.example`; spec/plan | — | 🧪 | Phase 0 + 模块 2 有 spec/plan/runbook；模块 1/3/4 尚未编写 |
 | XC-06 | 扩展点契约测试（adapter/pipeline/config schema） | 工程 | §11.11 | 待建 | 待建 | 📝 | 新适配器通过同一套 fixture |
 | XC-07 | 队列分池与背压 | 运维 | §11.5 | 待建 | 待建 | 📝 | 按 provider/tenant 限并发；锁超时回收 |
 | XC-08 | 租户配额与功能开关 | 扩展性 | §11.6 | 待建 | 待建 | 📝 | 超限不执行；灰度可回滚 |
@@ -242,7 +242,7 @@
 | 2026-11-15 | v0.7 | 确认 ADR-17；补扩展性设计：适配器注册表、lookup table、Pipeline 契约、队列分池/背压、租户配额/功能开关、故障转移、配置版本、分区索引、拆分阈值；新增 CORE-23–30、XC-06–11 |
 | 2026-11-15 | v0.8 | 完成 Phase 0 + 模块 2 实施计划（24 个任务，TDD 步骤，含迁移、队列/outbox、飞书审批、发送追踪、跟进与验收清单）；计划待评审，尚未开始编码 |
 | 2026-11-19 | v0.9 | 补充 Phase 0/1 实现计划追踪行（PLAN-01）与 runbook / `.env.growth.example`；Phase 0 + 模块 2 状态 🔨（实现中）；完成行待 Task 24 验收后标记 ✅ 并附证据命令 |
-| 2026-11-19 | v1.0 | Task 24 验收通过：Phase 0 + 模块 2 已完成行标记 ✅；记录实际命令结果（468/493 backend、424 growth-only、27 integration、22 frontend、compileall、npm run check）与逐项验收映射（§7）；n8n、Vault、llm_usage、告警、配额/开关、熔断、漏斗报表与 X 适配器保持未完成 |
+| 2026-11-19 | v1.0 | Task 24 验收通过：Phase 0 + 模块 2 已验证行标记 ✅、部分验证行标记 🧪（CORE-10/14/29、M2-01/15、XC-05）；记录实际命令结果（468/493 backend、424 growth-only、27 integration、22 frontend、compileall、npm run check）与逐项验收映射（§7）；n8n、Vault、llm_usage、告警、配额/开关、熔断、漏斗报表与 X 适配器保持未完成 |
 
 ---
 
@@ -276,7 +276,7 @@
 | 发送时强制全局 50/天、Reddit 5/天、subreddit 2/天 | `test_sending.py::_seed_rules`（50/5/2）及 `::test_mark_sent_blocks_global_daily_limit`、`::test_mark_sent_blocks_reddit_daily_limit`、`::test_mark_sent_blocks_subreddit_link_limit`；`test_postgres_integration.py::test_rate_limit_is_atomic_under_concurrency` |
 | 抑制名单阻止发送与跟进 | `test_sending.py::test_mark_sent_blocks_suppressed_platform_user`；`test_followup.py::test_followup_stops_when_author_is_suppressed` |
 | 跟进每天最多 1 次、累计最多 3 次；回复/负反馈即停 | `test_followup.py::test_followup_reschedules_until_one_day`、`::test_followup_stops_after_three`、`::test_followup_stops_when_lead_replied`、`::test_followup_stops_when_lead_is_closed`（replied/converted/suppressed/rejected） |
-| 不存在向 Reddit/HN/任意平台发帖、评论、私信或登录的代码路径 | `growth_social/adapters/reddit.py` 与 `hackernews.py` 仅调用 `client.get`（Reddit `new.json`、HN `search_by_date`）；grep `post/comment/dm/oauth/login` 仅命中 `growth_core/adapters/feishu.py:173,210` 的飞书卡片 POST；`test_social_e2e.py` 断言 notifier 仅在 `dispatch_outbox` 时被调用（L349–451） |
+| 不存在向 Reddit/HN/任意平台发帖、评论、私信或登录的代码路径 | `growth_social/adapters/reddit.py` 与 `hackernews.py` 仅调用 `client.get`（Reddit `new.json`、HN `search_by_date`）；grep `post/comment/dm/oauth/login` 同时命中 FastAPI 入站路由装饰器（`growth_social/api.py` 的 `@protected_router.post`）与 `growth_core/adapters/feishu.py:173,210` 的飞书卡片出站 POST，但无任何发往 Reddit/HN 的出站写调用；`test_social_e2e.py` 断言 notifier 仅在 `dispatch_outbox` 时被调用（L349–451） |
 | E2E 全链路 | `test_social_e2e.py::test_social_flow_from_post_to_followup`：1 lead → 1 qualified（100）→ 1 draft → 1 card → 1 approval → 1 sent → +24h 1 follow-up |
 | 既有后端/前端测试保持绿色，`npm run check` 不受影响 | 见 §7.1（468/493 backend；22 frontend；exit 0） |
 
@@ -287,4 +287,7 @@
 - **保持未完成**：CORE-02（tenant_credentials/Vault）、CORE-06（llm_usage 成本台账）、CORE-09（观测告警）、CORE-24/25（tenant_quotas/tenant_features 强制执行）、CORE-27（provider_health 熔断）、M2-13（每周漏斗报表）；M2-03（X 采集）按计划 ⏸。
 - **30 分钟采集节奏尚未端到端验证**：`growth_sources.cadence_minutes` 默认存 30，但定时触发依赖尚未实现的 n8n（CORE-11）；当前只有手动/任务种子触发。
 - **CORE-14 的邮件复用未验证**：`outreach_messages/versions` 由社媒链路使用；模块 4 邮件尚未实现，跨渠道复用待后续模块验证。
+- **CORE-10 Growth 侧复用未接线**：`opportunity_core` 仅被 `server/app/`（Opportunity Scout）import；`growth_core`/`growth_social` 未使用，跨产品复用待后续。
+- **CORE-29 仅完成版本化与记录**：`prompt_version` 已落库（`test_scoring.py` L580 断言为 `"1"`）；A/B 与一键回滚未实现。
+- **XC-05 文档仅覆盖 Phase 0 + 模块 2**：模块 1/3/4 尚无 plan/runbook。
 - 本次未改动任何业务代码或测试代码，仅更新本跟踪矩阵。
