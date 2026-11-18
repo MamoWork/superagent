@@ -30,6 +30,7 @@ from growth_social.services.link_policy import (
     LinkPolicyConfig,
     validate_link_policy,
 )
+from growth_social.services.sending import SendBlocked, mark_sent
 
 protected_router = APIRouter(dependencies=[Depends(require_service_token)])
 callback_router = APIRouter()
@@ -42,6 +43,11 @@ class LeadTaskRequest(BaseModel):
 class ReviseRequest(BaseModel):
     body_markdown: str
     operator: str = Field(min_length=1)
+
+
+class MarkSentRequest(BaseModel):
+    sent_at: datetime | None = None
+    channel: str = "manual"
 
 
 def _clamp_limit(limit: int) -> int:
@@ -346,6 +352,45 @@ async def revise_message(
         "status": "draft_ready",
         "version": new_version_number,
         "approval_id": approval.approval_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Manual send tracking
+# ---------------------------------------------------------------------------
+
+
+@protected_router.post("/api/growth/social/messages/{message_id}/sent")
+async def mark_message_sent(
+    message_id: UUID,
+    request: Request,
+    body: MarkSentRequest | None = None,
+    ctx: RequestContext = Depends(get_context),
+) -> dict[str, object]:
+    channel = body.channel if body is not None and body.channel else "manual"
+    sent_at = body.sent_at if body is not None else None
+    try:
+        message = await mark_sent(
+            request.app.state.repo,
+            tenant_id=ctx.tenant_id,
+            workspace_id=ctx.workspace_id,
+            message_id=message_id,
+            sent_at=sent_at,
+            channel=channel,
+        )
+    except SendBlocked as exc:
+        status_code = 404 if exc.code == "NOT_FOUND" else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "detail": exc.detail},
+        ) from None
+    return {
+        "message_id": str(message.id),
+        "status": message.status,
+        "sent_at": (
+            message.sent_at.isoformat() if message.sent_at is not None else None
+        ),
+        "channel": (message.metadata or {}).get("channel", channel),
     }
 
 
