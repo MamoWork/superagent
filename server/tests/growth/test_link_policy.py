@@ -162,7 +162,14 @@ def test_file_names_alone_are_not_links():
 
 @pytest.mark.parametrize(
     "extra",
-    ["acme.io", "evil.com?x=1", "evil.md/path", "evil.rs?x=1"],
+    [
+        "acme.io",
+        "evil.com?x=1",
+        "evil.md/path",
+        "evil.rs?x=1",
+        "evil.md#frag",
+        "evil.py#x",
+    ],
 )
 def test_bare_domain_token_is_counted(extra):
     text = (

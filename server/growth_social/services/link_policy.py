@@ -78,15 +78,16 @@ _IGNORED_FILE_SUFFIXES = frozenset(
 )
 # Order matters: the scheme/protocol-relative and ``www.`` forms are matched
 # first so the bare-domain branch never double-counts a URL inside them. A
-# bare domain may have no path at all (``acme.io``) or only a query
-# (``evil.com?x=1``); the file-extension denylist below removes obvious file
-# names such as ``node.js`` without opening a path-only bypass.
+# bare domain may have no path at all (``acme.io``), only a query
+# (``evil.com?x=1``), or only a fragment (``evil.md#frag``); the
+# file-extension denylist below removes obvious file names such as
+# ``node.js`` without opening a path/query/fragment bypass.
 _URL_PATTERN = re.compile(
     r"(?P<scheme>(?:https?:)?//[^\s<>\[\]\"'`)]+)"
     r"|(?P<www>www\.[^\s<>\[\]\"'`)]+)"
     r"|(?P<domain>(?<![\w@./-])"
     r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}"
-    r"(?::\d+)?(?:[/?][^\s<>\[\]\"'`)]*)?)",
+    r"(?::\d+)?(?:[/?#][^\s<>\[\]\"'`)]*)?)",
     re.IGNORECASE,
 )
 _TRAILING_PUNCTUATION = ".,;:!?'\""
