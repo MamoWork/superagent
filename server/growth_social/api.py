@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from growth_core.api.deps import RequestContext, get_context, require_service_token
 from growth_core.schemas import (
@@ -41,7 +41,7 @@ class LeadTaskRequest(BaseModel):
 
 class ReviseRequest(BaseModel):
     body_markdown: str
-    operator: str
+    operator: str = Field(min_length=1)
 
 
 def _clamp_limit(limit: int) -> int:
@@ -162,9 +162,11 @@ def _parse_json_body(body: bytes) -> dict[str, Any]:
     try:
         payload = json.loads(body)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="invalid JSON body") from None
+        raise HTTPException(
+            status_code=400, detail={"code": "INVALID_JSON"}
+        ) from None
     if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="invalid JSON body")
+        raise HTTPException(status_code=400, detail={"code": "INVALID_JSON"})
     return payload
 
 
@@ -264,8 +266,28 @@ async def revise_message(
         )
     new_version_number = latest.version + 1
 
-    # Claim the transition first so a lost race leaves no orphan version or
-    # approval behind.
+    # Create the immutable version first (brief order). A concurrent revision
+    # loses the unique ``(message_id, version)`` insert and must surface 409.
+    try:
+        version = await repo.create_version(
+            NewOutreachVersion(
+                tenant_id=ctx.tenant_id,
+                message_id=message_id,
+                version=new_version_number,
+                body_text=body.body_markdown,
+                cta_url=policy.link_url,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - typed check by class name below
+        if type(exc).__name__ == "UniqueViolationError":
+            raise HTTPException(
+                status_code=409, detail={"code": "REVISION_CONFLICT"}
+            ) from None
+        raise
+
+    # Old cards must never be able to approve the new version.
+    await repo.expire_pending_approvals(ctx.tenant_id, message_id)
+
     moved = await repo.update_message_status(
         ctx.tenant_id,
         message_id,
@@ -274,22 +296,26 @@ async def revise_message(
         metadata_patch={"draft_version": new_version_number},
     )
     if not moved:
+        # The orphan version row is accepted; audit the lost transition.
+        await repo.write_audit(
+            NewAuditEntry(
+                tenant_id=ctx.tenant_id,
+                workspace_id=message.workspace_id,
+                actor_type="user",
+                actor_id=body.operator,
+                action="social.approval_conflict",
+                entity_type="outreach_message",
+                entity_id=message_id,
+                after={
+                    "approval_id": f"{message.id}:v{new_version_number}",
+                    "expected_status": message.status,
+                    "attempted_status": "draft_ready",
+                },
+            )
+        )
         raise HTTPException(
-            status_code=409, detail={"code": "MESSAGE_NOT_REVISABLE"}
+            status_code=409, detail={"code": "REVISION_CONFLICT"}
         )
-
-    version = await repo.create_version(
-        NewOutreachVersion(
-            tenant_id=ctx.tenant_id,
-            message_id=message_id,
-            version=new_version_number,
-            body_text=body.body_markdown,
-            cta_url=policy.link_url,
-        )
-    )
-
-    # Old cards must never be able to approve the new version.
-    await repo.expire_pending_approvals(ctx.tenant_id, message_id)
 
     approval_id = f"{message.id}:v{new_version_number}"
     approval = await ensure_approval_and_enqueue_card(

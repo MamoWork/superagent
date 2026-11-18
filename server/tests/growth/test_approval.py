@@ -343,7 +343,8 @@ async def test_approve_on_non_draft_ready_message_is_already_decided(repo, now):
     # The approval CAS ran first, but the version must not be marked approved.
     latest = await repo.get_latest_version(TENANT, message.id)
     assert latest.approved_by is None
-    assert await repo.get_message(TENANT, message.id) is not None
+    stored = await repo.get_message(TENANT, message.id)
+    assert stored.status == "sent"
 
 
 async def test_reject_conflict_still_stands_and_is_audited(repo, now):
@@ -407,6 +408,141 @@ async def test_unknown_approval_is_not_found(repo, now):
     )
     assert result.status == "not_found"
     assert result.message_id is None
+
+
+async def test_approve_message_cas_conflict_is_audited(repo, now):
+    lead = await _seed_lead(repo)
+    message, _ = await _seed_message(repo, lead, status="rejected")
+    approval = await _seed_approval(repo, message)
+
+    result = await handle_approval(
+        repo,
+        tenant_id=TENANT,
+        action=FeishuAction(
+            approval_id=approval.approval_id, action="approve", operator="ou_1"
+        ),
+        now=now,
+    )
+
+    assert result.status == "already_decided"
+    conflicts = [
+        a for a in repo.audit if a["action"] == "social.approval_conflict"
+    ]
+    assert len(conflicts) == 1
+    assert conflicts[0]["actor_type"] == "service"
+    assert conflicts[0]["entity_id"] == message.id
+    assert conflicts[0]["after"] == {
+        "approval_id": approval.approval_id,
+        "expected_status": "draft_ready",
+        "attempted_status": "approved",
+    }
+    latest = await repo.get_latest_version(TENANT, message.id)
+    assert latest.approved_by is None
+
+
+async def test_approve_marks_the_matching_version(repo, now):
+    lead = await _seed_lead(repo)
+    message, _ = await _seed_message(repo, lead)
+    await repo.create_version(
+        NewOutreachVersion(
+            tenant_id=TENANT,
+            message_id=message.id,
+            version=2,
+            body_text=VALID_BODY,
+            cta_url=VALID_URL,
+        )
+    )
+    approval = await _seed_approval(
+        repo, message, approval_id=f"{message.id}:v2"
+    )
+
+    result = await handle_approval(
+        repo,
+        tenant_id=TENANT,
+        action=FeishuAction(
+            approval_id=approval.approval_id, action="approve", operator="ou_1"
+        ),
+        now=now,
+    )
+
+    assert result.status == "approved"
+    latest = await repo.get_latest_version(TENANT, message.id)
+    assert latest.version == 2
+    assert latest.approved_by == "ou_1"
+    conflicts = [
+        a for a in repo.audit if a["action"] == "social.approval_conflict"
+    ]
+    assert conflicts == []
+
+
+async def test_approve_does_not_mark_a_newer_version(repo, now):
+    lead = await _seed_lead(repo)
+    message, _ = await _seed_message(repo, lead)
+    await repo.create_version(
+        NewOutreachVersion(
+            tenant_id=TENANT,
+            message_id=message.id,
+            version=2,
+            body_text=VALID_BODY,
+            cta_url=VALID_URL,
+        )
+    )
+    approval = await _seed_approval(
+        repo, message, approval_id=f"{message.id}:v1"
+    )
+
+    result = await handle_approval(
+        repo,
+        tenant_id=TENANT,
+        action=FeishuAction(
+            approval_id=approval.approval_id, action="approve", operator="ou_1"
+        ),
+        now=now,
+    )
+
+    assert result.status == "approved"
+    latest = await repo.get_latest_version(TENANT, message.id)
+    assert latest.version == 2
+    assert latest.approved_by is None
+    conflicts = [
+        a for a in repo.audit if a["action"] == "social.approval_conflict"
+    ]
+    assert len(conflicts) == 1
+    assert conflicts[0]["after"] == {
+        "approval_id": approval.approval_id,
+        "approved_version": 1,
+        "latest_version": 2,
+    }
+
+
+async def test_approve_unparseable_approval_id_is_a_conflict(repo, now):
+    lead = await _seed_lead(repo)
+    message, _ = await _seed_message(repo, lead)
+    approval = await _seed_approval(
+        repo, message, approval_id="not-versioned"
+    )
+
+    result = await handle_approval(
+        repo,
+        tenant_id=TENANT,
+        action=FeishuAction(
+            approval_id="not-versioned", action="approve", operator="ou_1"
+        ),
+        now=now,
+    )
+
+    assert result.status == "approved"
+    latest = await repo.get_latest_version(TENANT, message.id)
+    assert latest.approved_by is None
+    conflicts = [
+        a for a in repo.audit if a["action"] == "social.approval_conflict"
+    ]
+    assert len(conflicts) == 1
+    assert conflicts[0]["after"] == {
+        "approval_id": "not-versioned",
+        "approved_version": None,
+        "latest_version": 1,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -535,6 +671,23 @@ def test_callback_legacy_payload_shape(repo):
     assert response.status_code == 200
     assert response.json()["toast"]["type"] == "success"
     assert _run(repo.get_message(TENANT, message.id)).status == "approved"
+
+
+def test_callback_malformed_action_returns_error_toast(repo):
+    client = _client(repo)
+    response = client.post(
+        "/internal/v1/approvals/callback",
+        json={
+            "token": VERIFICATION_TOKEN,
+            "event": {
+                "action": {
+                    "value": {"approval_id": "x:v1", "action": "send"}
+                }
+            },
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["toast"]["type"] == "error"
 
 
 # ---------------------------------------------------------------------------
@@ -673,6 +826,45 @@ def test_revise_on_sent_message_is_409(repo):
     assert response.json()["detail"] == {"code": "MESSAGE_NOT_REVISABLE"}
     assert len(repo.outreach_versions) == 1
     assert repo.outbox == []
+
+
+def test_revise_unique_violation_is_409_not_500(repo, monkeypatch):
+    client = _client(repo)
+
+    async def seed():
+        return await _seed(repo)
+
+    lead, message, _, _ = _run(seed())
+
+    unique_error = type("UniqueViolationError", (Exception,), {})
+
+    async def conflicting_create_version(version):
+        raise unique_error("duplicate (message_id, version)")
+
+    monkeypatch.setattr(repo, "create_version", conflicting_create_version)
+
+    response = _revise(client, message.id, VALID_BODY)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {"code": "REVISION_CONFLICT"}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"body_markdown": VALID_BODY, "operator": ""},
+        {"body_markdown": VALID_BODY},
+    ],
+    ids=["empty-operator", "missing-operator"],
+)
+def test_revise_operator_is_required_and_non_empty(repo, payload):
+    client = _client(repo)
+    response = client.post(
+        f"/api/growth/social/messages/{uuid4()}/revise",
+        json=payload,
+        headers=_auth(),
+    )
+    assert response.status_code == 422
 
 
 def test_revise_requires_service_token(repo):

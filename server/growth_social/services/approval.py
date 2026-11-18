@@ -42,6 +42,7 @@ __all__ = [
     "ensure_approval_and_enqueue_card",
     "handle_approval",
     "parse_feishu_action",
+    "subreddit_allows_links",
 ]
 
 _APPROVAL_ACTIONS = frozenset({"approve", "reject", "edit", "later"})
@@ -238,6 +239,21 @@ def _audit(
     )
 
 
+def _approval_version(approval_id: str) -> int | None:
+    """Return the ``N`` from an ``<message-id>:vN`` approval id, else ``None``."""
+    try:
+        prefix, suffix = approval_id.rsplit(":v", 1)
+    except ValueError:
+        return None
+    if not prefix:
+        return None
+    try:
+        value = int(suffix)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 async def _approve(
     repo: GrowthRepository,
     *,
@@ -257,12 +273,52 @@ async def _approve(
     if not moved:
         # The approval row now says approved but the message was not in a
         # sendable state. Do not stamp a version the operator did not approve.
+        await repo.write_audit(
+            _audit(
+                tenant_id=tenant_id,
+                workspace_id=approval.workspace_id,
+                actor_type="service",
+                actor_id=None,
+                action="social.approval_conflict",
+                message_id=approval.message_id,
+                after={
+                    "approval_id": approval.approval_id,
+                    "expected_status": "draft_ready",
+                    "attempted_status": "approved",
+                },
+            )
+        )
         return ApprovalResult("already_decided", approval.message_id)
 
+    # Mark only the version this approval id names. A stale card must never
+    # stamp a newer version the human did not see.
     latest = await repo.get_latest_version(tenant_id, approval.message_id)
-    if latest is not None:
+    approved_version = _approval_version(approval.approval_id)
+    if (
+        latest is not None
+        and approved_version is not None
+        and latest.version == approved_version
+    ):
         await repo.mark_version_approved(
             tenant_id, latest.id, decided_by, clock
+        )
+    else:
+        await repo.write_audit(
+            _audit(
+                tenant_id=tenant_id,
+                workspace_id=approval.workspace_id,
+                actor_type="service",
+                actor_id=None,
+                action="social.approval_conflict",
+                message_id=approval.message_id,
+                after={
+                    "approval_id": approval.approval_id,
+                    "approved_version": approved_version,
+                    "latest_version": (
+                        latest.version if latest is not None else None
+                    ),
+                },
+            )
         )
     await repo.write_audit(
         _audit(
