@@ -2,19 +2,46 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from growth_core.api.deps import RequestContext, get_context, require_service_token
-from growth_core.schemas import NewTask
+from growth_core.schemas import (
+    NewAuditEntry,
+    NewOutreachVersion,
+    NewTask,
+)
+from growth_core.services.feishu_signature import (
+    verify_feishu_signature,
+    verify_feishu_token,
+)
+from growth_social.services.approval import (
+    ensure_approval_and_enqueue_card,
+    handle_approval,
+    parse_feishu_action,
+    subreddit_allows_links,
+)
+from growth_social.services.link_policy import (
+    LinkPolicyConfig,
+    validate_link_policy,
+)
 
-router = APIRouter(dependencies=[Depends(require_service_token)])
+protected_router = APIRouter(dependencies=[Depends(require_service_token)])
+callback_router = APIRouter()
 
 
 class LeadTaskRequest(BaseModel):
     lead_id: UUID
+
+
+class ReviseRequest(BaseModel):
+    body_markdown: str
+    operator: str
 
 
 def _clamp_limit(limit: int) -> int:
@@ -41,7 +68,7 @@ async def _enqueue(
     return {"task_id": str(task_id)}
 
 
-@router.post("/internal/v1/social/ingest")
+@protected_router.post("/internal/v1/social/ingest")
 async def ingest(
     request: Request, ctx: RequestContext = Depends(get_context)
 ) -> dict[str, str]:
@@ -54,7 +81,7 @@ async def ingest(
     )
 
 
-@router.post("/internal/v1/social/score")
+@protected_router.post("/internal/v1/social/score")
 async def score(
     body: LeadTaskRequest,
     request: Request,
@@ -69,7 +96,7 @@ async def score(
     )
 
 
-@router.post("/internal/v1/social/draft")
+@protected_router.post("/internal/v1/social/draft")
 async def draft(
     body: LeadTaskRequest,
     request: Request,
@@ -84,7 +111,7 @@ async def draft(
     )
 
 
-@router.get("/api/growth/social/leads")
+@protected_router.get("/api/growth/social/leads")
 async def list_leads(
     request: Request,
     status: str | None = Query(default=None),
@@ -99,7 +126,7 @@ async def list_leads(
     return [row.model_dump(mode="json") for row in rows]
 
 
-@router.get("/api/growth/social/messages")
+@protected_router.get("/api/growth/social/messages")
 async def list_messages(
     request: Request,
     status: str | None = Query(default=None),
@@ -112,3 +139,192 @@ async def list_messages(
         limit=_clamp_limit(limit),
     )
     return [row.model_dump(mode="json") for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Feishu approval callback
+# ---------------------------------------------------------------------------
+
+#: Feishu cannot send the service token, so the callback lives on its own
+#: router (no router-level dependency) and is authenticated only by the
+#: signature or verification-token check below.
+_CALLBACK_PATH = "/internal/v1/approvals/callback"
+
+_TOAST_BY_STATUS = {
+    "approved": ("success", "Reply approved."),
+    "rejected": ("success", "Reply rejected."),
+    "already_decided": ("error", "This approval was already decided."),
+    "not_found": ("error", "Approval not found."),
+}
+
+
+def _parse_json_body(body: bytes) -> dict[str, Any]:
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="invalid JSON body") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    return payload
+
+
+@callback_router.post(_CALLBACK_PATH)
+async def feishu_approval_callback(request: Request) -> dict[str, Any]:
+    settings = request.app.state.settings
+    repo = request.app.state.repo
+    body = await request.body()
+
+    if settings.feishu_encrypt_key:
+        if not verify_feishu_signature(
+            request.headers, body, settings.feishu_encrypt_key
+        ):
+            raise HTTPException(status_code=403, detail="invalid feishu signature")
+        payload = _parse_json_body(body)
+    else:
+        payload = _parse_json_body(body)
+        if not verify_feishu_token(payload, settings.feishu_verification_token):
+            raise HTTPException(status_code=403, detail="invalid feishu token")
+
+    # Feishu URL verification: echo the challenge after token/signature checks.
+    if payload.get("type") == "url_verification":
+        challenge = payload.get("challenge")
+        if not isinstance(challenge, str):
+            raise HTTPException(status_code=400, detail="missing challenge")
+        return {"challenge": challenge}
+
+    try:
+        action = parse_feishu_action(payload)
+    except ValueError:
+        return {
+            "toast": {
+                "type": "error",
+                "content": "Invalid approval action.",
+            }
+        }
+
+    result = await handle_approval(
+        repo,
+        tenant_id=UUID(settings.tenant_id),
+        action=action,
+        now=datetime.now(timezone.utc),
+    )
+    toast_type, content = _TOAST_BY_STATUS.get(
+        result.status, ("success", result.reason or "Recorded.")
+    )
+    if result.status == "pending" and result.reason:
+        content = result.reason
+    return {"toast": {"type": toast_type, "content": content}}
+
+
+# ---------------------------------------------------------------------------
+# Operator revision
+# ---------------------------------------------------------------------------
+
+
+@protected_router.post("/api/growth/social/messages/{message_id}/revise")
+async def revise_message(
+    message_id: UUID,
+    body: ReviseRequest,
+    request: Request,
+    ctx: RequestContext = Depends(get_context),
+) -> dict[str, object]:
+    repo = request.app.state.repo
+    settings = request.app.state.settings
+
+    message = await repo.get_message(ctx.tenant_id, message_id)
+    if message is None:
+        raise HTTPException(
+            status_code=404, detail={"code": "MESSAGE_NOT_FOUND"}
+        )
+    if message.status not in ("draft_ready", "approved"):
+        raise HTTPException(
+            status_code=409, detail={"code": "MESSAGE_NOT_REVISABLE"}
+        )
+
+    lead = None
+    if message.lead_id is not None:
+        lead = await repo.get_lead(ctx.tenant_id, message.lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail={"code": "LEAD_NOT_FOUND"})
+
+    policy = validate_link_policy(
+        body.body_markdown,
+        LinkPolicyConfig(allowed_domain=settings.product_domain),
+        subreddit_allows_links=subreddit_allows_links(lead),
+    )
+    if policy.manual_only or not policy.ok or not policy.link_url:
+        raise HTTPException(
+            status_code=422, detail={"violations": policy.violations}
+        )
+
+    latest = await repo.get_latest_version(ctx.tenant_id, message_id)
+    if latest is None:
+        raise HTTPException(
+            status_code=409, detail={"code": "MESSAGE_NOT_REVISABLE"}
+        )
+    new_version_number = latest.version + 1
+
+    # Claim the transition first so a lost race leaves no orphan version or
+    # approval behind.
+    moved = await repo.update_message_status(
+        ctx.tenant_id,
+        message_id,
+        expected_status=message.status,
+        status="draft_ready",
+        metadata_patch={"draft_version": new_version_number},
+    )
+    if not moved:
+        raise HTTPException(
+            status_code=409, detail={"code": "MESSAGE_NOT_REVISABLE"}
+        )
+
+    version = await repo.create_version(
+        NewOutreachVersion(
+            tenant_id=ctx.tenant_id,
+            message_id=message_id,
+            version=new_version_number,
+            body_text=body.body_markdown,
+            cta_url=policy.link_url,
+        )
+    )
+
+    # Old cards must never be able to approve the new version.
+    await repo.expire_pending_approvals(ctx.tenant_id, message_id)
+
+    approval_id = f"{message.id}:v{new_version_number}"
+    approval = await ensure_approval_and_enqueue_card(
+        repo,
+        tenant_id=ctx.tenant_id,
+        workspace_id=message.workspace_id,
+        message=message,
+        approval_id=approval_id,
+        lead=lead,
+        version=version,
+        settings=settings,
+        clock=datetime.now(timezone.utc),
+    )
+    await repo.write_audit(
+        NewAuditEntry(
+            tenant_id=ctx.tenant_id,
+            workspace_id=message.workspace_id,
+            actor_type="user",
+            actor_id=body.operator,
+            action="social.revised",
+            entity_type="outreach_message",
+            entity_id=message_id,
+            after={"version": new_version_number},
+        )
+    )
+    return {
+        "message_id": str(message_id),
+        "status": "draft_ready",
+        "version": new_version_number,
+        "approval_id": approval.approval_id,
+    }
+
+
+# ``main`` includes this aggregate so the protected routes keep their service
+# token while the Feishu callback stays exempt.
+router = APIRouter()
+router.include_router(protected_router)
+router.include_router(callback_router)

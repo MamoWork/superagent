@@ -21,18 +21,17 @@ from growth_core.adapters.base import LLMClient, Notifier, ProviderNotConfigured
 from growth_core.config import GrowthSettings
 from growth_core.repositories.base import GrowthRepository
 from growth_core.schemas import (
-    ApprovalRequest,
-    NewApprovalRequest,
     NewAuditEntry,
-    NewOutboxMessage,
     NewOutreachMessage,
     NewOutreachVersion,
     OutreachMessage,
-    OutreachVersion,
     SocialLead,
 )
-from growth_social.schemas import IntentScore, ReplyDraft
-from growth_social.services.cards import build_approval_card
+from growth_social.schemas import ReplyDraft
+from growth_social.services.approval import (
+    ensure_approval_and_enqueue_card,
+    subreddit_allows_links,
+)
 from growth_social.services.link_policy import (
     LinkPolicyConfig,
     build_utm_url,
@@ -45,7 +44,6 @@ __all__ = ["draft_reply"]
 PROMPT_KEY = "social_reply"
 
 _LINK_PLACEHOLDER = "{{LINK}}"
-_SCORED_STATUSES = frozenset({"qualified", "watch", "dropped"})
 # Only pre-send states may need a repair card. ``sent`` is terminal: its card
 # already went out, so re-drafting must not manufacture a fresh approval.
 _REPAIRABLE_STATUSES = frozenset({"draft_ready", "approved"})
@@ -62,26 +60,6 @@ def _clock(now: datetime | None) -> datetime:
 def _require_setting(value: str, name: str) -> None:
     if not value:
         raise ProviderNotConfigured(f"PROVIDER_NOT_CONFIGURED: {name}")
-
-
-def _subreddit_allows_links(lead: SocialLead) -> bool:
-    """Link allowance follows the configured rule's truthiness.
-
-    A missing key defaults to allowed; ``None``, ``0``, ``""`` and ``False``
-    all mean links are not allowed for this subreddit.
-    """
-    return bool(lead.subreddit_rules.get("self_promotion_allowed", True))
-
-
-def _card_score(lead: SocialLead) -> IntentScore:
-    status = lead.status if lead.status in _SCORED_STATUSES else "watch"
-    return IntentScore(
-        score=lead.score or 0,
-        status=status,
-        dimensions=[],
-        penalties=[],
-        summary="",
-    )
 
 
 def _audit(
@@ -138,68 +116,6 @@ async def _record_policy_outcome(
     return message
 
 
-async def _ensure_approval_and_enqueue_card(
-    repo: GrowthRepository,
-    *,
-    tenant_id: UUID,
-    workspace_id: UUID,
-    message: OutreachMessage,
-    approval_id: str,
-    lead: SocialLead,
-    version: OutreachVersion,
-    settings: GrowthSettings,
-    clock: datetime,
-) -> ApprovalRequest:
-    """Idempotently ensure the approval row and its card outbox row exist.
-
-    Both writes are keyed by ``approval_id`` so retries and concurrent workers
-    converge on one approval and one ``feishu:{approval_id}`` outbox row. The
-    card is always rebuilt from ``version.body_text``, which is the immutable
-    text that was validated at draft time.
-    """
-    approval = await repo.get_approval_request(tenant_id, approval_id)
-    if approval is None:
-        approval = await repo.create_approval_request(
-            NewApprovalRequest(
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
-                message_id=message.id,
-                approval_id=approval_id,
-                provider="feishu",
-                payload={"chat_id": settings.feishu_chat_id},
-            )
-        )
-
-    policy = validate_link_policy(
-        version.body_text,
-        LinkPolicyConfig(allowed_domain=settings.product_domain),
-        subreddit_allows_links=_subreddit_allows_links(lead),
-    )
-    card = build_approval_card(
-        approval_id=approval_id,
-        message=message,
-        lead=lead,
-        version=version,
-        score=_card_score(lead),
-        link_policy=policy,
-    )
-    await repo.enqueue_outbox(
-        NewOutboxMessage(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            topic="feishu.card",
-            payload={
-                "chat_id": settings.feishu_chat_id,
-                "card": card,
-                "approval_id": approval_id,
-            },
-            idempotency_key=f"feishu:{approval_id}",
-            next_attempt_at=clock,
-        )
-    )
-    return approval
-
-
 async def _mark_lead_draft_ready(
     repo: GrowthRepository, tenant_id: UUID, lead: SocialLead
 ) -> None:
@@ -236,7 +152,7 @@ async def _resume_existing(
         raise LookupError(_MISSING_LEAD)
 
     approval_id = f"{existing.id}:v{latest.version}"
-    await _ensure_approval_and_enqueue_card(
+    await ensure_approval_and_enqueue_card(
         repo,
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -334,7 +250,7 @@ async def draft_reply(
     policy = validate_link_policy(
         final_text,
         LinkPolicyConfig(allowed_domain=settings.product_domain),
-        subreddit_allows_links=_subreddit_allows_links(lead),
+        subreddit_allows_links=subreddit_allows_links(lead),
     )
     if policy.manual_only:
         return await _record_policy_outcome(
@@ -404,7 +320,7 @@ async def draft_reply(
                 raise
 
     approval_id = f"{message.id}:v{version.version}"
-    await _ensure_approval_and_enqueue_card(
+    await ensure_approval_and_enqueue_card(
         repo,
         tenant_id=tenant_id,
         workspace_id=workspace_id,
