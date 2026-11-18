@@ -196,7 +196,7 @@ async def score_lead(
         intent.status,
         score=intent.score,
         score_reasons=intent.model_dump(),
-        model=getattr(llm, "model", None) or None,
+        model=model or getattr(llm, "model", None) or None,
         prompt_version=str(prompt.version),
     )
 

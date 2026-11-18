@@ -8,7 +8,11 @@ from uuid import UUID, uuid4
 import pytest
 
 from growth_core import seed_data
-from growth_core.adapters.base import ProviderBadOutput, ProviderNotConfigured
+from growth_core.adapters.base import (
+    ProviderBadOutput,
+    ProviderNotConfigured,
+    ProviderUnavailable,
+)
 from growth_core.schemas import PromptTemplate, ScoringRubric, SocialLead
 from growth_social.schemas import (
     IntentDimensionDraft,
@@ -560,7 +564,7 @@ async def test_lost_update_with_unscored_reread_returns_computed_score(repo, now
 # ---------------------------------------------------------------------------
 
 
-async def test_model_and_prompt_version_are_recorded(repo, now):
+async def test_explicit_model_argument_is_recorded(repo, now):
     tenant, workspace = uuid4(), uuid4()
     _seed_config(repo, tenant)
     lead = _add_lead(repo, tenant, workspace)
@@ -572,12 +576,58 @@ async def test_model_and_prompt_version_are_recorded(repo, now):
 
     stored = await repo.get_lead(tenant, lead.id)
     assert stored is not None
-    assert stored.model == "fake-model"
+    assert stored.model == "scoring-model"
     assert stored.prompt_version == "1"
     assert stored.score_reasons is not None
     assert stored.score_reasons["score"] == 100
     assert stored.score_reasons["status"] == "qualified"
     assert stored.score_reasons["summary"] == "Looks like a real fit."
+
+
+async def test_llm_model_is_recorded_when_argument_is_omitted(repo, now):
+    tenant, workspace = uuid4(), uuid4()
+    _seed_config(repo, tenant)
+    lead = _add_lead(repo, tenant, workspace)
+    llm = FakeLLM(_draft())
+    assert llm.model == "fake-model"
+
+    await score_lead(repo, llm, tenant_id=tenant, lead_id=lead.id, now=now)
+
+    stored = await repo.get_lead(tenant, lead.id)
+    assert stored is not None
+    assert stored.model == "fake-model"
+
+
+async def test_llm_without_model_attribute_records_none(repo, now):
+    tenant, workspace = uuid4(), uuid4()
+    _seed_config(repo, tenant)
+    lead = _add_lead(repo, tenant, workspace)
+    llm = FakeLLM(_draft())
+    llm.model = None
+
+    await score_lead(repo, llm, tenant_id=tenant, lead_id=lead.id, now=now)
+
+    stored = await repo.get_lead(tenant, lead.id)
+    assert stored is not None
+    assert stored.model is None
+
+
+async def test_llm_failure_leaves_lead_unchanged(repo, now):
+    tenant, workspace = uuid4(), uuid4()
+    _seed_config(repo, tenant)
+    lead = _add_lead(repo, tenant, workspace, status="discovered")
+    llm = FakeLLM(
+        exc=ProviderUnavailable("PROVIDER_UNAVAILABLE: llm timeout")
+    )
+
+    with pytest.raises(ProviderUnavailable):
+        await score_lead(repo, llm, tenant_id=tenant, lead_id=lead.id, now=now)
+
+    stored = await repo.get_lead(tenant, lead.id)
+    assert stored is not None
+    assert stored.score is None
+    assert stored.status == "discovered"
+    assert repo.tasks == []
 
 
 # ---------------------------------------------------------------------------

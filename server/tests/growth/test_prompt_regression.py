@@ -115,8 +115,8 @@ def test_golden_set_precision_at_threshold():
 
 
 @pytest.mark.skipif(
-    not os.getenv("GROWTH_TEST_LLM_API_KEY"),
-    reason="GROWTH_TEST_LLM_API_KEY is not set; live prompt regression is opt-in",
+    not (os.getenv("GROWTH_TEST_LLM") or os.getenv("GROWTH_TEST_LLM_API_KEY")),
+    reason="GROWTH_TEST_LLM or GROWTH_TEST_LLM_API_KEY is not set; live prompt regression is opt-in",
 )
 async def test_live_golden_set_precision():
     rows = load_rows()
@@ -125,7 +125,7 @@ async def test_live_golden_set_precision():
     now = datetime.now(timezone.utc)
 
     llm = OpenAICompatibleLLM(
-        api_key=os.environ["GROWTH_TEST_LLM_API_KEY"],
+        api_key=os.getenv("GROWTH_TEST_LLM_API_KEY") or os.getenv("GROWTH_TEST_LLM") or "",
         model=os.environ.get("GROWTH_TEST_LLM_MODEL", "gpt-4o-mini"),
         base_url=os.environ.get("GROWTH_TEST_LLM_BASE_URL"),
     )
