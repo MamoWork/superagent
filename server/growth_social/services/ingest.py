@@ -102,12 +102,17 @@ async def _record_error(
     errors: list[SourceError],
 ) -> None:
     errors.append(SourceError(source_id, code, message))
-    await repo.update_source_run(
-        tenant_id,
-        source_id,
-        last_run_at=now,
-        last_error=f"{code}: {message}",
-    )
+    # Bookkeeping is best-effort: a store failure here must not mask the
+    # original source error, duplicate it, or abort the remaining sources.
+    try:
+        await repo.update_source_run(
+            tenant_id,
+            source_id,
+            last_run_at=now,
+            last_error=f"{code}: {message}",
+        )
+    except Exception:  # noqa: BLE001 - best-effort bookkeeping
+        pass
 
 
 async def ingest_social(
@@ -177,11 +182,20 @@ async def ingest_social(
                 result.errors,
             )
         else:
-            await repo.update_source_run(
-                tenant_id,
-                source.id,
-                last_run_at=clock,
-                last_error=None,
-            )
+            try:
+                await repo.update_source_run(
+                    tenant_id,
+                    source.id,
+                    last_run_at=clock,
+                    last_error=None,
+                )
+            except Exception as exc:  # noqa: BLE001 - one source must not abort the run
+                result.errors.append(
+                    SourceError(
+                        source.id,
+                        _UNEXPECTED,
+                        f"{type(exc).__name__}: {exc}",
+                    )
+                )
 
     return result

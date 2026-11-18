@@ -500,3 +500,150 @@ async def test_upsert_failure_skips_remaining_posts_of_that_source(now):
     assert row.last_run_at == now
     assert row.last_error == "UNEXPECTED_ERROR: RuntimeError: database unavailable"
     assert _source_row(repo, healthy.id).last_error is None
+
+
+class FailingUpdateRepository(FakeGrowthRepository):
+    """Delegates everything, but ``update_source_run`` raises for selected sources."""
+
+    def __init__(self, fail_source_ids: set[UUID] | None = None) -> None:
+        super().__init__()
+        self.fail_source_ids = fail_source_ids
+        self.update_calls: list[UUID] = []
+
+    async def update_source_run(
+        self,
+        tenant_id,
+        source_id,
+        last_run_at,
+        last_error=None,
+    ) -> None:
+        self.update_calls.append(source_id)
+        if self.fail_source_ids is None or source_id in self.fail_source_ids:
+            raise RuntimeError("store unavailable")
+        await super().update_source_run(
+            tenant_id, source_id, last_run_at, last_error=last_error
+        )
+
+
+async def test_update_source_run_failure_on_success_does_not_abort_run(now):
+    repo = FailingUpdateRepository()
+    tenant_id, workspace_id = uuid4(), uuid4()
+    failing = _source(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        source_type="hackernews",
+        platform="hackernews",
+    )
+    healthy = _source(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        source_type="reddit",
+        platform="reddit",
+    )
+    await repo.add_source(failing)
+    await repo.add_source(healthy)
+    repo.fail_source_ids = {failing.id}
+
+    result = await ingest_social(
+        repo,
+        {
+            "hackernews": FakeReddit(
+                [
+                    _post(
+                        "h1",
+                        platform="hackernews",
+                        source_url="https://news.ycombinator.com/item?id=h1",
+                        subreddit=None,
+                    )
+                ]
+            ),
+            "reddit": FakeReddit([_post("a1")]),
+        },
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        now=now,
+    )
+
+    assert result.created == 2
+    assert result.errors == [
+        SourceError(
+            failing.id, "UNEXPECTED_ERROR", "RuntimeError: store unavailable"
+        )
+    ]
+    assert [lead.platform for lead in repo.leads] == ["hackernews", "reddit"]
+    assert healthy.id in repo.update_calls
+
+
+async def test_update_source_run_failure_after_adapter_error_keeps_single_error(now):
+    repo = FailingUpdateRepository()
+    tenant_id, workspace_id = uuid4(), uuid4()
+    failing = _source(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        source_type="hackernews",
+        platform="hackernews",
+    )
+    healthy = _source(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        source_type="reddit",
+        platform="reddit",
+    )
+    await repo.add_source(failing)
+    await repo.add_source(healthy)
+    repo.fail_source_ids = {failing.id}
+
+    result = await ingest_social(
+        repo,
+        {
+            "hackernews": RaisingAdapter(ProviderUnavailable("feed down")),
+            "reddit": FakeReddit([_post()]),
+        },
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        now=now,
+    )
+
+    assert result.created == 1
+    assert result.errors == [
+        SourceError(failing.id, "ProviderUnavailable", "feed down")
+    ]
+    assert [lead.platform for lead in repo.leads] == ["reddit"]
+
+
+async def test_update_source_run_failure_on_missing_adapter_keeps_single_error(now):
+    repo = FailingUpdateRepository()
+    tenant_id, workspace_id = uuid4(), uuid4()
+    unconfigured = _source(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        source_type="hackernews",
+        platform="hackernews",
+    )
+    healthy = _source(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        source_type="reddit",
+        platform="reddit",
+    )
+    await repo.add_source(unconfigured)
+    await repo.add_source(healthy)
+    repo.fail_source_ids = {unconfigured.id}
+
+    result = await ingest_social(
+        repo,
+        {"reddit": FakeReddit([_post()])},
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        now=now,
+    )
+
+    assert result.created == 1
+    assert result.errors == [
+        SourceError(
+            unconfigured.id,
+            "ADAPTER_NOT_CONFIGURED",
+            "no adapter for source_type hackernews",
+        )
+    ]
+    assert [lead.platform for lead in repo.leads] == ["reddit"]
