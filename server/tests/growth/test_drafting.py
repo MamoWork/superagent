@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -15,6 +14,7 @@ from growth_core.config import GrowthSettings
 from growth_core.services.outbox import dispatch_outbox
 from growth_core.schemas import (
     NewOutreachMessage,
+    NewOutreachVersion,
     OutreachMessage,
     PromptTemplate,
     SocialLead,
@@ -265,6 +265,12 @@ async def test_success_creates_message_version_approval_outbox_card_and_audit(
         {"approval_id": approval_id, "action": "reject"},
         {"approval_id": approval_id, "action": "later"},
     ]
+    title_element = next(
+        element
+        for element in card["elements"]
+        if lead.title in element.get("text", {}).get("content", "")
+    )
+    assert title_element["text"]["tag"] == "plain_text"
 
     # Delivery is the worker/outbox dispatcher's job.
     sent = await dispatch_outbox(repo, notifier, now=now)
@@ -456,6 +462,31 @@ async def test_subreddit_without_links_is_suppressed(repo, now):
     }
 
 
+@pytest.mark.parametrize("rule_value", [None, 0], ids=["none", "zero"])
+async def test_falsey_subreddit_rule_suppresses_links(repo, now, rule_value):
+    tenant, workspace = uuid4(), uuid4()
+    lead = _seed(
+        repo,
+        tenant,
+        workspace,
+        subreddit_rules={"self_promotion_allowed": rule_value},
+    )
+
+    message = await _draft(
+        repo,
+        FakeLLM(_valid_draft()),
+        FakeNotifier(),
+        tenant,
+        workspace,
+        lead,
+        _settings(tenant, workspace),
+        now,
+    )
+
+    assert message.status == "suppressed"
+    assert "SUBREDDIT_NO_LINKS" in message.metadata["policy_violations"]
+
+
 async def test_explicit_true_subreddit_rule_allows_links(repo, now):
     tenant, workspace = uuid4(), uuid4()
     lead = _seed(
@@ -607,6 +638,58 @@ async def test_crash_window_without_version_returns_existing(repo, now):
     assert notifier.cards == []
 
 
+async def test_sent_message_does_not_get_a_fresh_card(repo, now):
+    tenant, workspace = uuid4(), uuid4()
+    lead = _seed(repo, tenant, workspace)
+    existing = await repo.create_message(
+        NewOutreachMessage(
+            tenant_id=tenant,
+            workspace_id=workspace,
+            channel="social",
+            provider="reddit",
+            lead_id=lead.id,
+            status="sent",
+            dedupe_key=f"draft:{lead.id}",
+            metadata={"draft_version": 1},
+        )
+    )
+    await repo.create_version(
+        NewOutreachVersion(
+            tenant_id=tenant,
+            message_id=existing.id,
+            version=1,
+            body_text=VALID_BODY.replace("{{LINK}}", _expected_url(lead)),
+            cta_url=_expected_url(lead),
+            model="drafter-v1",
+            prompt_version="3",
+            risk_flags=[],
+        )
+    )
+    llm = FakeLLM(_valid_draft())
+    llm.exc = AssertionError("sent drafts must not call the LLM")
+    notifier = FakeNotifier()
+
+    result = await _draft(
+        repo,
+        llm,
+        notifier,
+        tenant,
+        workspace,
+        lead,
+        _settings(tenant, workspace),
+        now,
+    )
+
+    assert result.id == existing.id
+    assert len(llm.calls) == 0
+    assert len(repo.messages) == 1
+    assert len(repo.outreach_versions) == 1
+    assert repo.approvals == []
+    assert repo.outbox == []
+    assert await dispatch_outbox(repo, notifier, now=now) == 0
+    assert notifier.cards == []
+
+
 async def test_retry_after_rejection_returns_without_card(repo, now):
     tenant, workspace = uuid4(), uuid4()
     lead = _seed(repo, tenant, workspace)
@@ -740,11 +823,3 @@ async def test_llm_failure_leaves_no_rows_and_lead_unchanged(repo, now):
     stored = await repo.get_lead(tenant, lead.id)
     assert stored is not None
     assert stored.status == "qualified"
-
-
-async def test_default_settings_helper_is_deterministic():
-    # Guard the fixture helper against accidental datetime drift.
-    settings = replace(
-        _settings(uuid4(), uuid4()), product_url="https://example.com"
-    )
-    assert settings.product_url == "https://example.com"

@@ -21,12 +21,14 @@ from growth_core.adapters.base import LLMClient, Notifier, ProviderNotConfigured
 from growth_core.config import GrowthSettings
 from growth_core.repositories.base import GrowthRepository
 from growth_core.schemas import (
+    ApprovalRequest,
     NewApprovalRequest,
     NewAuditEntry,
     NewOutboxMessage,
     NewOutreachMessage,
     NewOutreachVersion,
     OutreachMessage,
+    OutreachVersion,
     SocialLead,
 )
 from growth_social.schemas import IntentScore, ReplyDraft
@@ -44,7 +46,9 @@ PROMPT_KEY = "social_reply"
 
 _LINK_PLACEHOLDER = "{{LINK}}"
 _SCORED_STATUSES = frozenset({"qualified", "watch", "dropped"})
-_RESUMABLE_STATUSES = frozenset({"draft_ready", "approved", "sent"})
+# Only pre-send states may need a repair card. ``sent`` is terminal: its card
+# already went out, so re-drafting must not manufacture a fresh approval.
+_REPAIRABLE_STATUSES = frozenset({"draft_ready", "approved"})
 
 _MISSING_LEAD = "LEAD_NOT_FOUND"
 _MISSING_PROMPT = "PROVIDER_NOT_CONFIGURED: social_reply prompt"
@@ -61,8 +65,12 @@ def _require_setting(value: str, name: str) -> None:
 
 
 def _subreddit_allows_links(lead: SocialLead) -> bool:
-    """Only an explicit ``False`` disables links for a subreddit."""
-    return lead.subreddit_rules.get("self_promotion_allowed", True) is not False
+    """Link allowance follows the configured rule's truthiness.
+
+    A missing key defaults to allowed; ``None``, ``0``, ``""`` and ``False``
+    all mean links are not allowed for this subreddit.
+    """
+    return bool(lead.subreddit_rules.get("self_promotion_allowed", True))
 
 
 def _card_score(lead: SocialLead) -> IntentScore:
@@ -130,40 +138,32 @@ async def _record_policy_outcome(
     return message
 
 
-async def _resume_existing(
+async def _ensure_approval_and_enqueue_card(
     repo: GrowthRepository,
     *,
     tenant_id: UUID,
     workspace_id: UUID,
-    lead_id: UUID,
-    existing: OutreachMessage,
+    message: OutreachMessage,
+    approval_id: str,
+    lead: SocialLead,
+    version: OutreachVersion,
     settings: GrowthSettings,
     clock: datetime,
-) -> OutreachMessage:
-    """Return an existing draft, repairing approval/card state if needed."""
-    if existing.status not in _RESUMABLE_STATUSES:
-        return existing
+) -> ApprovalRequest:
+    """Idempotently ensure the approval row and its card outbox row exist.
 
-    latest = await repo.get_latest_version(tenant_id, existing.id)
-    if latest is None:
-        # Known crash window: message committed, version not yet. Returning the
-        # row untouched lets the next worker retry start from a clean state
-        # rather than manufacturing a version it cannot validate.
-        return existing
-
-    resolved_lead_id = existing.lead_id or lead_id
-    lead = await repo.get_lead(tenant_id, resolved_lead_id)
-    if lead is None:
-        raise LookupError(_MISSING_LEAD)
-
-    approval_id = f"{existing.id}:v{latest.version}"
+    Both writes are keyed by ``approval_id`` so retries and concurrent workers
+    converge on one approval and one ``feishu:{approval_id}`` outbox row. The
+    card is always rebuilt from ``version.body_text``, which is the immutable
+    text that was validated at draft time.
+    """
     approval = await repo.get_approval_request(tenant_id, approval_id)
     if approval is None:
-        await repo.create_approval_request(
+        approval = await repo.create_approval_request(
             NewApprovalRequest(
                 tenant_id=tenant_id,
                 workspace_id=workspace_id,
-                message_id=existing.id,
+                message_id=message.id,
                 approval_id=approval_id,
                 provider="feishu",
                 payload={"chat_id": settings.feishu_chat_id},
@@ -171,15 +171,15 @@ async def _resume_existing(
         )
 
     policy = validate_link_policy(
-        latest.body_text,
+        version.body_text,
         LinkPolicyConfig(allowed_domain=settings.product_domain),
         subreddit_allows_links=_subreddit_allows_links(lead),
     )
     card = build_approval_card(
         approval_id=approval_id,
-        message=existing,
+        message=message,
         lead=lead,
-        version=latest,
+        version=version,
         score=_card_score(lead),
         link_policy=policy,
     )
@@ -197,11 +197,57 @@ async def _resume_existing(
             next_attempt_at=clock,
         )
     )
+    return approval
 
-    # Best-effort: a concurrent worker may already have moved the lead along.
+
+async def _mark_lead_draft_ready(
+    repo: GrowthRepository, tenant_id: UUID, lead: SocialLead
+) -> None:
+    """Best-effort compare-and-set move; a lost race is harmless."""
     await repo.update_lead_status(
         tenant_id, lead.id, lead.status, "draft_ready"
     )
+
+
+async def _resume_existing(
+    repo: GrowthRepository,
+    *,
+    tenant_id: UUID,
+    workspace_id: UUID,
+    lead_id: UUID,
+    existing: OutreachMessage,
+    settings: GrowthSettings,
+    clock: datetime,
+) -> OutreachMessage:
+    """Return an existing draft, repairing approval/card state if needed."""
+    if existing.status not in _REPAIRABLE_STATUSES:
+        return existing
+
+    latest = await repo.get_latest_version(tenant_id, existing.id)
+    if latest is None:
+        # Known crash window: message committed, version not yet. Returning the
+        # row untouched lets the next worker retry start from a clean state
+        # rather than manufacturing a version it cannot validate.
+        return existing
+
+    resolved_lead_id = existing.lead_id or lead_id
+    lead = await repo.get_lead(tenant_id, resolved_lead_id)
+    if lead is None:
+        raise LookupError(_MISSING_LEAD)
+
+    approval_id = f"{existing.id}:v{latest.version}"
+    await _ensure_approval_and_enqueue_card(
+        repo,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        message=existing,
+        approval_id=approval_id,
+        lead=lead,
+        version=latest,
+        settings=settings,
+        clock=clock,
+    )
+    await _mark_lead_draft_ready(repo, tenant_id, lead)
     return existing
 
 
@@ -348,54 +394,30 @@ async def draft_reply(
         try:
             version = await repo.create_version(new_version)
         except Exception:
-            # Another worker won the ``(message, version=1)`` insert; continue
-            # only if its row is now visible.
+            # Broad catch by necessity: neither the in-memory fake nor the
+            # Postgres repository exposes a shared unique-violation type here.
+            # This protects the create-version crash window: another worker won
+            # the ``(message, version=1)`` insert, so continue only if its row
+            # is now visible.
             version = await repo.get_latest_version(tenant_id, message.id)
             if version is None:
                 raise
 
     approval_id = f"{message.id}:v{version.version}"
-    approval = await repo.get_approval_request(tenant_id, approval_id)
-    if approval is None:
-        await repo.create_approval_request(
-            NewApprovalRequest(
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
-                message_id=message.id,
-                approval_id=approval_id,
-                provider="feishu",
-                payload={"chat_id": settings.feishu_chat_id},
-            )
-        )
-
-    card = build_approval_card(
-        approval_id=approval_id,
+    await _ensure_approval_and_enqueue_card(
+        repo,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
         message=message,
+        approval_id=approval_id,
         lead=lead,
         version=version,
-        score=_card_score(lead),
-        link_policy=policy,
+        settings=settings,
+        clock=clock,
     )
-    await repo.enqueue_outbox(
-        NewOutboxMessage(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            topic="feishu.card",
-            payload={
-                "chat_id": settings.feishu_chat_id,
-                "card": card,
-                "approval_id": approval_id,
-            },
-            idempotency_key=f"feishu:{approval_id}",
-            next_attempt_at=clock,
-        )
-    )
-
     # The lead normally moves qualified -> draft_ready; a lost compare-and-set
     # means another worker already advanced it, which is fine.
-    await repo.update_lead_status(
-        tenant_id, lead.id, lead.status, "draft_ready"
-    )
+    await _mark_lead_draft_ready(repo, tenant_id, lead)
     await repo.write_audit(
         _audit(
             tenant_id=tenant_id,

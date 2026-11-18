@@ -32,9 +32,11 @@ _ACTION_TYPES = {
 
 
 def _div(content: str) -> dict[str, Any]:
+    # Plain text everywhere: post titles, bodies, model risk flags, and score
+    # summaries must never be markdown-interpreted by the chat renderer.
     return {
         "tag": "div",
-        "text": {"tag": "lark_md", "content": content},
+        "text": {"tag": "plain_text", "content": content},
     }
 
 
@@ -65,7 +67,11 @@ def build_approval_card(
     score: IntentScore,
     link_policy: LinkPolicyResult,
 ) -> dict[str, Any]:
-    """Build the Feishu interactive approval card for one draft version."""
+    """Build the Feishu interactive approval card for one draft version.
+
+    ``message`` is retained for the plan-mandated interface; the card is keyed
+    by ``approval_id`` and needs no other message field.
+    """
     community = lead.subreddit or lead.platform
     risk_flags = ", ".join(version.risk_flags) or "none"
     subreddit_result = (
@@ -77,19 +83,19 @@ def build_approval_card(
     summary = score.summary or "n/a"
 
     elements: list[dict[str, Any]] = [
-        _div(f"**Platform:** {lead.platform}\n**Community:** {community}"),
-        _div(f"**Post:** {lead.title}\n**Source:** {lead.source_url}"),
-        _div(f"**Score:** {score.score}\n**Why:** {summary}"),
+        _div(f"Platform: {lead.platform}\nCommunity: {community}"),
+        _div(f"Post: {lead.title}\nSource: {lead.source_url}"),
+        _div(f"Score: {score.score}\nWhy: {summary}"),
         _div(
-            f"**Risk flags:** {risk_flags}\n"
-            f"**Subreddit rules:** {subreddit_result}"
+            f"Risk flags: {risk_flags}\n"
+            f"Subreddit rules: {subreddit_result}"
         ),
         {
             "tag": "div",
             "text": {"tag": "plain_text", "content": version.body_text},
         },
         _actions(approval_id),
-        _div(f"**Final link:** {final_link}"),
+        _div(f"Final link: {final_link}"),
     ]
 
     return {
