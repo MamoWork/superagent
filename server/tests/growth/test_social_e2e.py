@@ -528,16 +528,39 @@ async def test_run_worker_loop_dispatches_when_working_and_sleeps_when_idle(
 ):
     tenant_id, workspace_id = uuid4(), uuid4()
     notifier = FakeNotifier()
-    sleep_calls: list[float] = []
+    events: list[str] = []
     stop = asyncio.Event()
 
     async def fake_sleep(seconds: float) -> None:
-        sleep_calls.append(seconds)
+        events.append("sleep")
         stop.set()
 
     monkeypatch.setattr(worker_module.asyncio, "sleep", fake_sleep)
 
+    # Record only successful claims and deliveries so the event log names the
+    # work that actually happened, not the empty poll noise around it.
+    original_claim = repo.claim_task
+
+    async def recording_claim(worker_id, now=None):
+        task = await original_claim(worker_id, now=now)
+        if task is not None:
+            events.append("claim")
+        return task
+
+    monkeypatch.setattr(repo, "claim_task", recording_claim)
+
+    original_dispatch = worker_module.dispatch_outbox
+
+    async def recording_dispatch(target_repo, target_notifier, **kwargs):
+        sent = await original_dispatch(target_repo, target_notifier, **kwargs)
+        if sent:
+            events.append("dispatch")
+        return sent
+
+    monkeypatch.setattr(worker_module, "dispatch_outbox", recording_dispatch)
+
     async def handler(task) -> None:
+        index = task.payload["index"]
         await repo.enqueue_outbox(
             NewOutboxMessage(
                 tenant_id=tenant_id,
@@ -545,25 +568,26 @@ async def test_run_worker_loop_dispatches_when_working_and_sleeps_when_idle(
                 topic="feishu.card",
                 payload={
                     "chat_id": "oc_chat",
-                    "card": {"probe": True},
-                    "approval_id": "loop-approval",
+                    "card": {"probe": index},
+                    "approval_id": f"loop-approval-{index}",
                 },
-                idempotency_key="outbox:loop",
+                idempotency_key=f"outbox:loop:{index}",
             )
         )
 
     router = TaskRouter()
     router.register("demo", handler)
-    await repo.enqueue_task(
-        NewTask(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            pipeline="social",
-            task_type="demo",
-            payload={},
-            idempotency_key="demo:loop",
+    for index in (1, 2):
+        await repo.enqueue_task(
+            NewTask(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                pipeline="social",
+                task_type="demo",
+                payload={"index": index},
+                idempotency_key=f"demo:loop:{index}",
+            )
         )
-    )
 
     await run_worker_loop(
         repo=repo,
@@ -574,10 +598,14 @@ async def test_run_worker_loop_dispatches_when_working_and_sleeps_when_idle(
         stop=stop,
     )
 
-    # The working iteration claimed the task and drained the outbox it queued.
-    assert notifier.cards == [{"probe": True}]
-    assert repo.outbox_for("outbox:loop")[0].status == "sent"
-    task = repo.tasks_for("demo:loop")[0]
-    assert task.status == "succeeded"
-    # Only the following idle iteration slept, once.
-    assert sleep_calls == [0.5]
+    # Event order is load-bearing: each claim is followed by the delivery of
+    # the card that same iteration queued, and sleep happens only on the
+    # following idle iteration. A top-of-loop sleep, a sleep after a working
+    # iteration, or an idle-only dispatch all break this exact sequence.
+    assert events == ["claim", "dispatch", "claim", "dispatch", "sleep"]
+
+    # End state: both tasks ran, both cards were delivered, in claim order.
+    assert notifier.cards == [{"probe": 1}, {"probe": 2}]
+    assert repo.outbox_for("outbox:loop:1")[0].status == "sent"
+    assert repo.outbox_for("outbox:loop:2")[0].status == "sent"
+    assert [task.status for task in repo.tasks] == ["succeeded", "succeeded"]
