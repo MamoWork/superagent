@@ -1,0 +1,89 @@
+{
+  "name": "Growth Agent - Social Ingest (every 30 min)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "8f1c2a40-1b7e-4c55-9f61-1a0d2b3c4e01",
+      "name": "Every 30 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://<YOUR_API_DOMAIN>/internal/v1/social/ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Service-Token",
+              "value": "<GROWTH_SERVICE_TOKEN>"
+            },
+            {
+              "name": "X-Tenant-Id",
+              "value": "<GROWTH_TENANT_ID>"
+            },
+            {
+              "name": "X-Workspace-Id",
+              "value": "<GROWTH_WORKSPACE_ID>"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "=ingest-{{ $now.toFormat('yyyyMMddHHmm') }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "8f1c2a40-1b7e-4c55-9f61-1a0d2b3c4e02",
+      "name": "Trigger ingest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Every 30 minutes": {
+      "main": [
+        [
+          {
+            "node": "Trigger ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "description": "Calls the Growth Agent internal ingest endpoint every 30 minutes. Replace the four placeholders before activating. Idempotency-Key collapses same-minute retries into one task."
+  }
+}

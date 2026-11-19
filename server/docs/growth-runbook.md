@@ -149,6 +149,8 @@ n8n HTTP Request 节点对应：
 - Header `X-Tenant-Id` / `X-Workspace-Id`：租户/工作区 UUID（不传时回退到进程环境里的 `GROWTH_TENANT_ID` / `GROWTH_WORKSPACE_ID`；显式传更稳）
 - Header `Idempotency-Key`：`ingest-{{$now.toFormat('yyyyMMddHHmm')}}`
 
+可直接导入本仓库的 [`docs/n8n/growth-social-ingest.json`](n8n/growth-social-ingest.json)：工作流默认未激活，导入后把 `<YOUR_API_DOMAIN>`、`<GROWTH_SERVICE_TOKEN>`、`<GROWTH_TENANT_ID>`、`<GROWTH_WORKSPACE_ID>` 四个占位符替换为实际值，再启用即可。HTTP 节点设置了 `neverError`，接口返回 4xx/5xx 时不会让 n8n 执行失败，请通过 n8n 执行记录与 API 日志核对结果。
+
 同一分钟内重试会命中同一幂等键，只产生一个任务；缺少 `Idempotency-Key` 返回 400 `INVALID_IDEMPOTENCY_KEY`。
 
 重放评分/草稿（通常不需要，ingest/评分链路已自动入队）：
